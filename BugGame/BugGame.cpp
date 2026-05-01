@@ -540,7 +540,6 @@ namespace
         // 横隔板只画需要的几段，让圆点附近自然形成缺口。
         vertical(0.500f, 0.0f, 1.0f);
         horizontal(0.0f, 0.115f, 0.500f);
-        horizontal(0.145f, 0.500f, 0.500f);
         horizontal(0.755f, 1.0f, 0.500f);
     }
 
