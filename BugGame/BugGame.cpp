@@ -541,6 +541,7 @@ namespace
         vertical(0.500f, 0.0f, 0.305f);
         vertical(0.500f, 0.705f, 1.0f);
         horizontal(0.0f, 0.115f, 0.500f);
+        horizontal(0.145f, 0.245f, 0.500f);
         horizontal(0.755f, 1.0f, 0.500f);
     }
 
