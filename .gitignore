@@ -1,0 +1,28 @@
+# Visual Studio local cache
+.vs/
+**/.vs/
+*.suo
+*.user
+*.VC.db
+*.VC.VC.opendb
+
+# Build outputs
+**/bin/
+**/obj/
+*.exe
+*.ilk
+*.pdb
+*.idb
+*.log
+*.recipe
+
+# Local reference files and screenshots
+Window is White/
+*.png
+*.jpg
+*.jpeg
+
+# Earlier web prototype files, not used by the C++ submission
+index.html
+styles.css
+game.js
