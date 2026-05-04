@@ -131,6 +131,8 @@ namespace
         ScreenMode screen = ScreenMode::LevelSelect;
         Vec2 activeCursor{};
         RECT lastBoardRect{};
+        RECT fixedAnchorRect{};
+        std::array<Vec2, 15> fixedAnchors{};
         int resizeLevelTopY = 0;
         int resizeLevelHiddenY = 0;
         Vec2 boxLeftDot{};
@@ -177,6 +179,9 @@ namespace
     RECT GetAnchorRect();
     RECT GetLevelGridRect();
     RECT GetLevelButtonRect(int levelIndex);
+    const std::array<Vec2, 15>& AnchorLayoutForLevel(int levelIndex);
+    Vec2 AnchorFromRect(const RECT& board, const std::array<Vec2, 15>& layout, int anchorId);
+    void CaptureLevelGeometry(int index);
     Vec2 AnchorToClient(int anchorId);
     Vec2 ResizeLevelAnchorToClient(int anchorId);
     Vec2 LevelSelectToClient(int levelIndex);
@@ -300,36 +305,42 @@ namespace
         return MakeRect(left, top, left + kLevelTileSize, top + kLevelTileSize);
     }
 
-    // 把锚点编号转换成窗口客户区中的真实像素坐标。
-    Vec2 AnchorToClient(int anchorId)
+    const std::array<Vec2, 15>& AnchorLayoutForLevel(int levelIndex)
     {
-        if (g.screen == ScreenMode::Playing && g.levelIndex == kResizeLevelIndex)
+        if (levelIndex == kBendLevelIndex)
         {
-            return ResizeLevelAnchorToClient(anchorId);
+            return kBendAnchorLayout;
         }
-        if (g.screen == ScreenMode::Playing && g.levelIndex == kBoxLevelIndex)
+        if (levelIndex == kGapLevelIndex)
         {
-            return anchorId == 8 ? g.boxRightDot : g.boxLeftDot;
+            return kGapAnchorLayout;
         }
+        if (levelIndex == kDividerLevelIndex)
+        {
+            return kDividerAnchorLayout;
+        }
+        return kAnchorLayout;
+    }
 
-        const RECT board = GetAnchorRect();
-        Vec2 anchor = kAnchorLayout[static_cast<size_t>(anchorId)];
-        if (g.screen == ScreenMode::Playing && g.levelIndex == kBendLevelIndex)
-        {
-            anchor = kBendAnchorLayout[static_cast<size_t>(anchorId)];
-        }
-        else if (g.screen == ScreenMode::Playing && g.levelIndex == kGapLevelIndex)
-        {
-            anchor = kGapAnchorLayout[static_cast<size_t>(anchorId)];
-        }
-        else if (g.screen == ScreenMode::Playing && g.levelIndex == kDividerLevelIndex)
-        {
-            anchor = kDividerAnchorLayout[static_cast<size_t>(anchorId)];
-        }
+    Vec2 AnchorFromRect(const RECT& board, const std::array<Vec2, 15>& layout, int anchorId)
+    {
+        const Vec2 anchor = layout[static_cast<size_t>(anchorId)];
         return Vec2{
             board.left + anchor.x * static_cast<float>(WidthOf(board)),
             board.top + anchor.y * static_cast<float>(HeightOf(board))
         };
+    }
+
+    // 把锚点编号转换成窗口客户区中的真实像素坐标。
+    Vec2 AnchorToClient(int anchorId)
+    {
+        if (g.screen == ScreenMode::Playing)
+        {
+            return g.fixedAnchors[static_cast<size_t>(anchorId)];
+        }
+
+        const RECT board = GetAnchorRect();
+        return AnchorFromRect(board, kAnchorLayout, anchorId);
     }
 
     Vec2 ResizeLevelAnchorToClient(int anchorId)
@@ -373,6 +384,55 @@ namespace
         const float x = client.left + xRel[static_cast<size_t>(column)] * static_cast<float>(WidthOf(client));
         const float y = static_cast<float>(hiddenBelowWindow ? g.resizeLevelHiddenY : g.resizeLevelTopY);
         return Vec2{ x, y };
+    }
+
+    void CaptureLevelGeometry(int index)
+    {
+        // 进入关卡时把所有点和机关的基础矩形“拍照”保存。
+        // 之后调整窗口大小只会裁剪可见区域，不再把关卡内容重新居中。
+        g.fixedAnchorRect = GetAnchorRect();
+        const std::array<Vec2, 15>& layout = AnchorLayoutForLevel(index);
+        for (int anchorId = 0; anchorId < static_cast<int>(g.fixedAnchors.size()); ++anchorId)
+        {
+            if (index == kResizeLevelIndex)
+            {
+                g.fixedAnchors[static_cast<size_t>(anchorId)] = ResizeLevelAnchorToClient(anchorId);
+            }
+            else
+            {
+                g.fixedAnchors[static_cast<size_t>(anchorId)] = AnchorFromRect(g.fixedAnchorRect, layout, anchorId);
+            }
+        }
+
+        if (index == kBoxLevelIndex)
+        {
+            const RECT board = GetBoardRect();
+            const int boxSize = 170;
+            const Vec2 leftDot{
+                board.left + 0.24f * static_cast<float>(WidthOf(board)),
+                board.top + 0.50f * static_cast<float>(HeightOf(board))
+            };
+            const Vec2 rightDot{
+                board.left + 0.62f * static_cast<float>(WidthOf(board)),
+                board.top + 0.50f * static_cast<float>(HeightOf(board))
+            };
+
+            g.boxLeftDot = leftDot;
+            g.boxRightDot = rightDot;
+            g.fixedAnchors[0] = leftDot;
+            g.fixedAnchors[8] = rightDot;
+            g.boxFrameRect = MakeRect(
+                static_cast<int>(std::round(rightDot.x)) - boxSize / 2,
+                static_cast<int>(std::round(rightDot.y)) - boxSize / 2,
+                static_cast<int>(std::round(rightDot.x)) + boxSize / 2,
+                static_cast<int>(std::round(rightDot.y)) + boxSize / 2);
+        }
+        else
+        {
+            g.boxLeftDot = {};
+            g.boxRightDot = {};
+            g.boxFrameRect = {};
+        }
     }
 
     Vec2 LevelSelectToClient(int levelIndex)
@@ -510,7 +570,7 @@ namespace
         RECT client{};
         GetClientRect(g.hwnd, &client);
 
-        const RECT board = GetAnchorRect();
+        const RECT board = g.fixedAnchorRect;
         const int thickness = 10;
         const int x = board.left + WidthOf(board) / 2;
         return MakeRect(x - thickness / 2, client.top, x + thickness / 2, client.bottom);
@@ -670,7 +730,7 @@ namespace
     // 关卡配置。现在玩法改成玩家直接画线，所以每关只需要描述端点配对。
     void DrawBendStructure(HDC hdc)
     {
-        const RECT board = GetAnchorRect();
+        const RECT board = g.fixedAnchorRect;
         const int thickness = kWallThickness;
 
         auto xAt = [&](float rel)
@@ -710,7 +770,7 @@ namespace
 
     void DrawGapStructure(HDC hdc)
     {
-        const RECT board = GetAnchorRect();
+        const RECT board = g.fixedAnchorRect;
         const int thickness = kWallThickness;
 
         auto xAt = [&](float rel)
@@ -1101,34 +1161,8 @@ namespace
             g.resizeLevelHiddenY = 0;
         }
 
-        if (index == kBoxLevelIndex)
-        {
-            const RECT board = GetBoardRect();
-            const int boxSize = 170;
-            const Vec2 leftDot{
-                board.left + 0.24f * static_cast<float>(WidthOf(board)),
-                board.top + 0.50f * static_cast<float>(HeightOf(board))
-            };
-            const Vec2 rightDot{
-                board.left + 0.62f * static_cast<float>(WidthOf(board)),
-                board.top + 0.50f * static_cast<float>(HeightOf(board))
-            };
-
-            g.boxLeftDot = leftDot;
-            g.boxRightDot = rightDot;
-            g.boxFrameRect = MakeRect(
-                static_cast<int>(std::round(rightDot.x)) - boxSize / 2,
-                static_cast<int>(std::round(rightDot.y)) - boxSize / 2,
-                static_cast<int>(std::round(rightDot.x)) + boxSize / 2,
-                static_cast<int>(std::round(rightDot.y)) + boxSize / 2);
-        }
-        else
-        {
-            g.boxLeftDot = {};
-            g.boxRightDot = {};
-            g.boxFrameRect = {};
-        }
-        g.lastBoardRect = GetAnchorRect();
+        CaptureLevelGeometry(index);
+        g.lastBoardRect = g.fixedAnchorRect;
         RefreshState();
     }
 
@@ -1607,18 +1641,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
 
     case WM_SIZE:
     {
-        // 允许窗口边缘缩放后，把路径整体平移到新的居中棋盘位置。
+        // 关卡内容在加载时已经定格；缩放窗口只裁剪可见区域，不再自动平移或居中。
         if (g.hwnd == hwnd)
         {
-            const RECT oldBoard = g.lastBoardRect;
-            const RECT newBoard = GetAnchorRect();
-            if (g.screen == ScreenMode::Playing &&
-                g.levelIndex != kResizeLevelIndex &&
-                g.levelIndex != kBoxLevelIndex)
-            {
-                ShiftPaths(static_cast<float>(newBoard.left - oldBoard.left), static_cast<float>(newBoard.top - oldBoard.top));
-            }
-            g.lastBoardRect = newBoard;
             RefreshState();
             InvalidateRect(hwnd, nullptr, FALSE);
         }
