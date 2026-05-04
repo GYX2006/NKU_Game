@@ -58,6 +58,7 @@ namespace
     constexpr int kGapLevelIndex = 3;
     constexpr int kResizeLevelIndex = 4;
     constexpr int kDividerLevelIndex = 5;
+    constexpr int kBoxLevelIndex = 6;
     // 开发调试开关：true 表示选关界面里所有已做好的关卡都可以直接打开。
     // 如果之后想恢复正式流程，把这里改成 false 即可回到逐关解锁。
     constexpr bool kDeveloperUnlockAllLevels = true;
@@ -132,6 +133,9 @@ namespace
         RECT lastBoardRect{};
         int resizeLevelTopY = 0;
         int resizeLevelHiddenY = 0;
+        Vec2 boxLeftDot{};
+        Vec2 boxRightDot{};
+        RECT boxFrameRect{};
         std::wstring levelName;
         std::wstring hint;
         std::wstring status = L"Press on a colored dot and draw to its twin.";
@@ -162,7 +166,6 @@ namespace
         { 0.20f, 0.62f }, { 0.35f, 0.76f }, { 0.50f, 0.76f }, { 0.65f, 0.76f }, { 0.80f, 0.62f },
     }};
 
-
     // 全局游戏状态。
     GameState g;
 
@@ -189,6 +192,11 @@ namespace
     bool SegmentIntersectsRect(const Vec2& a, const Vec2& b, const RECT& rect);
     RECT GetDividerWallRect();
     bool SegmentHitsDividerWall(const Vec2& a, const Vec2& b);
+    bool PointOutsideClient(const Vec2& point);
+    RECT GetBoxFrameRect();
+    std::array<RECT, 4> GetBoxWallRects();
+    bool SegmentHitsBoxWall(const Vec2& a, const Vec2& b);
+    bool SegmentHitsActiveWall(const Vec2& a, const Vec2& b);
     HPEN CreateRoundedPen(COLORREF color, int width);
     void FillRectColor(HDC hdc, const RECT& rect, COLORREF color);
     void DrawTextBlock(HDC hdc, const std::wstring& text, const RECT& rect, int size, int weight, UINT format);
@@ -198,6 +206,7 @@ namespace
     void DrawBendStructure(HDC hdc);
     void DrawGapStructure(HDC hdc);
     void DrawDividerStructure(HDC hdc);
+    void DrawBoxStructure(HDC hdc);
     std::vector<LevelDefinition> BuildLevels();
     std::wstring ColorName(COLORREF color);
     std::vector<Segment> BuildSegments();
@@ -297,6 +306,10 @@ namespace
         if (g.screen == ScreenMode::Playing && g.levelIndex == kResizeLevelIndex)
         {
             return ResizeLevelAnchorToClient(anchorId);
+        }
+        if (g.screen == ScreenMode::Playing && g.levelIndex == kBoxLevelIndex)
+        {
+            return anchorId == 8 ? g.boxRightDot : g.boxLeftDot;
         }
 
         const RECT board = GetAnchorRect();
@@ -510,6 +523,65 @@ namespace
             SegmentIntersectsRect(a, b, GetDividerWallRect());
     }
 
+    bool PointOutsideClient(const Vec2& point)
+    {
+        RECT client{};
+        GetClientRect(g.hwnd, &client);
+        return point.x < static_cast<float>(client.left) ||
+            point.x > static_cast<float>(client.right) ||
+            point.y < static_cast<float>(client.top) ||
+            point.y > static_cast<float>(client.bottom);
+    }
+
+    RECT GetBoxFrameRect()
+    {
+        return g.boxFrameRect;
+    }
+
+    std::array<RECT, 4> GetBoxWallRects()
+    {
+        const RECT frame = GetBoxFrameRect();
+        const int thickness = 10;
+        return {{
+            MakeRect(frame.left, frame.top, frame.right, frame.top + thickness),
+            MakeRect(frame.right - thickness, frame.top, frame.right, frame.bottom),
+            MakeRect(frame.left, frame.bottom - thickness, frame.right, frame.bottom),
+            MakeRect(frame.left, frame.top, frame.left + thickness, frame.bottom),
+        }};
+    }
+
+    bool SegmentHitsBoxWall(const Vec2& a, const Vec2& b)
+    {
+        if (g.screen != ScreenMode::Playing || g.levelIndex != kBoxLevelIndex)
+        {
+            return false;
+        }
+
+        RECT client{};
+        GetClientRect(g.hwnd, &client);
+        for (const RECT& wall : GetBoxWallRects())
+        {
+            // 第七关的机关核心是“窗口遮住的墙不再存在”：
+            // 因此碰撞只检查当前客户区内真正可见的墙体部分。
+            RECT visibleWall{};
+            if (!IntersectRect(&visibleWall, &wall, &client))
+            {
+                continue;
+            }
+
+            if (SegmentIntersectsRect(a, b, visibleWall))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool SegmentHitsActiveWall(const Vec2& a, const Vec2& b)
+    {
+        return SegmentHitsDividerWall(a, b) || SegmentHitsBoxWall(a, b);
+    }
+
     HPEN CreateRoundedPen(COLORREF color, int width)
     {
         LOGBRUSH brush{};
@@ -683,6 +755,14 @@ namespace
         FillRectColor(hdc, GetDividerWallRect(), kWallGray);
     }
 
+    void DrawBoxStructure(HDC hdc)
+    {
+        for (const RECT& wall : GetBoxWallRects())
+        {
+            FillRectColor(hdc, wall, kWallGray);
+        }
+    }
+
     std::vector<LevelDefinition> BuildLevels()
     {
         return {
@@ -737,6 +817,13 @@ namespace
                     { kYellow, 0, 10 },
                     { kRed, 6, 8 },
                     { kBlue, 4, 14 },
+                }
+            },
+            {
+                L"BOX",
+                L"The dot is boxed in. Leave the window and come back inside.",
+                {
+                    { kRed, 0, 8 },
                 }
             },
         };
@@ -936,6 +1023,16 @@ namespace
                 }
             }
         }
+        else if (g.levelIndex == kBoxLevelIndex)
+        {
+            for (const Segment& segment : segments)
+            {
+                if (SegmentHitsBoxWall(segment.a, segment.b))
+                {
+                    ++g.crossings;
+                }
+            }
+        }
 
         bool allConnected = !g.paths.empty();
         for (const PathState& path : g.paths)
@@ -1002,6 +1099,34 @@ namespace
         {
             g.resizeLevelTopY = 0;
             g.resizeLevelHiddenY = 0;
+        }
+
+        if (index == kBoxLevelIndex)
+        {
+            const RECT board = GetBoardRect();
+            const int boxSize = 170;
+            const Vec2 leftDot{
+                board.left + 0.24f * static_cast<float>(WidthOf(board)),
+                board.top + 0.50f * static_cast<float>(HeightOf(board))
+            };
+            const Vec2 rightDot{
+                board.left + 0.62f * static_cast<float>(WidthOf(board)),
+                board.top + 0.50f * static_cast<float>(HeightOf(board))
+            };
+
+            g.boxLeftDot = leftDot;
+            g.boxRightDot = rightDot;
+            g.boxFrameRect = MakeRect(
+                static_cast<int>(std::round(rightDot.x)) - boxSize / 2,
+                static_cast<int>(std::round(rightDot.y)) - boxSize / 2,
+                static_cast<int>(std::round(rightDot.x)) + boxSize / 2,
+                static_cast<int>(std::round(rightDot.y)) + boxSize / 2);
+        }
+        else
+        {
+            g.boxLeftDot = {};
+            g.boxRightDot = {};
+            g.boxFrameRect = {};
         }
         g.lastBoardRect = GetAnchorRect();
         RefreshState();
@@ -1113,17 +1238,26 @@ namespace
         }
 
         PathState& path = g.paths[g.activeWire];
-        if (g.levelIndex == kDividerLevelIndex)
+        if (g.levelIndex == kDividerLevelIndex || g.levelIndex == kBoxLevelIndex)
         {
             RECT client{};
             GetClientRect(g.hwnd, &client);
 
-            // 第六关允许玩家把线从窗口下边框外绕过去；
-            // 因此只限制水平范围，垂直方向允许伸到当前窗口下方一段距离。
+            // 第六关允许玩家从窗口下方绕过无限隔板；
+            // 第七关允许玩家从被窗口遮住的方框外侧绕回目标点。
             constexpr int kClientPadding = 6;
             constexpr int kOutsideBottomRoom = 520;
-            point.x = std::clamp(point.x, static_cast<float>(client.left + kClientPadding), static_cast<float>(client.right - kClientPadding));
-            point.y = std::clamp(point.y, static_cast<float>(client.top + kClientPadding), static_cast<float>(client.bottom + kOutsideBottomRoom));
+            constexpr int kOutsideSideRoom = 520;
+            if (g.levelIndex == kBoxLevelIndex)
+            {
+                point.x = std::clamp(point.x, static_cast<float>(client.left - kOutsideSideRoom), static_cast<float>(client.right + kOutsideSideRoom));
+                point.y = std::clamp(point.y, static_cast<float>(client.top - kOutsideSideRoom), static_cast<float>(client.bottom + kOutsideSideRoom));
+            }
+            else
+            {
+                point.x = std::clamp(point.x, static_cast<float>(client.left + kClientPadding), static_cast<float>(client.right - kClientPadding));
+                point.y = std::clamp(point.y, static_cast<float>(client.top + kClientPadding), static_cast<float>(client.bottom + kOutsideBottomRoom));
+            }
         }
         else
         {
@@ -1145,6 +1279,21 @@ namespace
         }
 
         // 把一次较长的鼠标移动拆成多个小样本点，避免曲线被压扁成一条直线。
+        if (g.levelIndex == kBoxLevelIndex && PointOutsideClient(start) && !PointOutsideClient(point))
+        {
+            // 从窗口外重新进入时，不插入中间采样点，形成“从窗口背后绕进来”的效果。
+            // 但如果这条回来的线穿过了仍然可见的墙，就说明玩家是在硬闯，必须拦住。
+            if (!SegmentHitsBoxWall(start, point))
+            {
+                path.points.push_back(point);
+            }
+            else
+            {
+                g.activeCursor = path.points.back();
+            }
+            return;
+        }
+
         const float distance = std::sqrt(distance2);
         const int steps = std::max(1, static_cast<int>(std::ceil(distance / kDrawPointStep)));
         for (int i = 1; i <= steps; ++i)
@@ -1155,7 +1304,7 @@ namespace
                 start.y + (point.y - start.y) * t
             };
 
-            if (SegmentHitsDividerWall(path.points.back(), sample))
+            if (SegmentHitsActiveWall(path.points.back(), sample))
             {
                 g.activeCursor = path.points.back();
                 break;
@@ -1198,7 +1347,7 @@ namespace
         const Vec2 cursor{ static_cast<float>(point.x), static_cast<float>(point.y) };
         AppendActivePoint(cursor);
 
-        const bool canReachTargetWithoutWall = !path.points.empty() && !SegmentHitsDividerWall(path.points.back(), target);
+        const bool canReachTargetWithoutWall = !path.points.empty() && !SegmentHitsActiveWall(path.points.back(), target);
         if (canReachTargetWithoutWall &&
             DistanceSquared(cursor, target) <= static_cast<float>((kEndpointRadius + 10) * (kEndpointRadius + 10)))
         {
@@ -1337,6 +1486,10 @@ namespace
         {
             DrawDividerStructure(hdc);
         }
+        else if (g.levelIndex == kBoxLevelIndex)
+        {
+            DrawBoxStructure(hdc);
+        }
 
         for (size_t i = 0; i < g.paths.size(); ++i)
         {
@@ -1436,6 +1589,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             g.unlockedLevels = static_cast<int>(g.defs.size());
             LoadLevel(kDividerLevelIndex);
         }
+        else if (commandLine.find(L"--level=7") != std::wstring::npos)
+        {
+            g.unlockedLevels = static_cast<int>(g.defs.size());
+            LoadLevel(kBoxLevelIndex);
+        }
         else
         {
             g.unlockedLevels = kDeveloperUnlockAllLevels ? static_cast<int>(g.defs.size()) : 1;
@@ -1454,7 +1612,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         {
             const RECT oldBoard = g.lastBoardRect;
             const RECT newBoard = GetAnchorRect();
-            if (g.screen == ScreenMode::Playing && g.levelIndex != kResizeLevelIndex)
+            if (g.screen == ScreenMode::Playing &&
+                g.levelIndex != kResizeLevelIndex &&
+                g.levelIndex != kBoxLevelIndex)
             {
                 ShiftPaths(static_cast<float>(newBoard.left - oldBoard.left), static_cast<float>(newBoard.top - oldBoard.top));
             }
