@@ -57,6 +57,7 @@ namespace
     constexpr int kBendLevelIndex = 2;
     constexpr int kGapLevelIndex = 3;
     constexpr int kResizeLevelIndex = 4;
+    constexpr int kDividerLevelIndex = 5;
     // 开发调试开关：true 表示选关界面里所有已做好的关卡都可以直接打开。
     // 如果之后想恢复正式流程，把这里改成 false 即可回到逐关解锁。
     constexpr bool kDeveloperUnlockAllLevels = true;
@@ -155,6 +156,12 @@ namespace
         { 0.16f, 0.76f }, { 0.35f, 0.76f }, { 0.500f, 0.705f }, { 0.65f, 0.76f }, { 0.895f, 0.805f },
     }};
 
+    constexpr std::array<Vec2, 15> kDividerAnchorLayout = {{
+        { 0.20f, 0.34f }, { 0.35f, 0.24f }, { 0.50f, 0.24f }, { 0.65f, 0.24f }, { 0.80f, 0.34f },
+        { 0.16f, 0.50f }, { 0.38f, 0.48f }, { 0.50f, 0.50f }, { 0.62f, 0.48f }, { 0.84f, 0.50f },
+        { 0.20f, 0.62f }, { 0.35f, 0.76f }, { 0.50f, 0.76f }, { 0.65f, 0.76f }, { 0.80f, 0.62f },
+    }};
+
 
     // 全局游戏状态。
     GameState g;
@@ -185,6 +192,7 @@ namespace
     void DrawBoardFrame(HDC hdc, const RECT& board);
     void DrawBendStructure(HDC hdc);
     void DrawGapStructure(HDC hdc);
+    void DrawDividerStructure(HDC hdc);
     std::vector<LevelDefinition> BuildLevels();
     std::wstring ColorName(COLORREF color);
     std::vector<Segment> BuildSegments();
@@ -295,6 +303,10 @@ namespace
         else if (g.screen == ScreenMode::Playing && g.levelIndex == kGapLevelIndex)
         {
             anchor = kGapAnchorLayout[static_cast<size_t>(anchorId)];
+        }
+        else if (g.screen == ScreenMode::Playing && g.levelIndex == kDividerLevelIndex)
+        {
+            anchor = kDividerAnchorLayout[static_cast<size_t>(anchorId)];
         }
         return Vec2{
             board.left + anchor.x * static_cast<float>(WidthOf(board)),
@@ -597,6 +609,19 @@ namespace
         horizontal(0.755f, 1.0f, 0.500f);
     }
 
+    void DrawDividerStructure(HDC hdc)
+    {
+        RECT client{};
+        GetClientRect(g.hwnd, &client);
+
+        const RECT board = GetAnchorRect();
+        const int thickness = 10;
+        const int x = board.left + WidthOf(board) / 2;
+        const int top = std::max(client.top + 18, board.top - 130);
+        const int bottom = std::min(client.bottom - 18, board.bottom + 130);
+        FillRectColor(hdc, MakeRect(x - thickness / 2, top, x + thickness / 2, bottom), kWallGray);
+    }
+
     std::vector<LevelDefinition> BuildLevels()
     {
         return {
@@ -645,12 +670,12 @@ namespace
                 }
             },
             {
-                L"FINAL",
-                L"One clean screen. No crossings left.",
+                L"DIVIDE",
+                L"The pane is split in two. Match each pair without crossings.",
                 {
-                    { kRed, 5, 4 },
-                    { kYellow, 10, 9 },
-                    { kBlue, 0, 14 },
+                    { kYellow, 0, 10 },
+                    { kRed, 6, 8 },
+                    { kBlue, 4, 14 },
                 }
             },
         };
@@ -1213,6 +1238,10 @@ namespace
         {
             DrawGapStructure(hdc);
         }
+        else if (g.levelIndex == kDividerLevelIndex)
+        {
+            DrawDividerStructure(hdc);
+        }
 
         for (size_t i = 0; i < g.paths.size(); ++i)
         {
@@ -1306,6 +1335,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         {
             g.unlockedLevels = static_cast<int>(g.defs.size());
             LoadLevel(kResizeLevelIndex);
+        }
+        else if (commandLine.find(L"--level=6") != std::wstring::npos)
+        {
+            g.unlockedLevels = static_cast<int>(g.defs.size());
+            LoadLevel(kDividerLevelIndex);
         }
         else
         {
