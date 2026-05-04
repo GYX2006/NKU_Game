@@ -56,6 +56,7 @@ namespace
 
     constexpr int kBendLevelIndex = 2;
     constexpr int kGapLevelIndex = 3;
+    constexpr int kResizeLevelIndex = 4;
     // 开发调试开关：true 表示选关界面里所有已做好的关卡都可以直接打开。
     // 如果之后想恢复正式流程，把这里改成 false 即可回到逐关解锁。
     constexpr bool kDeveloperUnlockAllLevels = true;
@@ -128,6 +129,8 @@ namespace
         ScreenMode screen = ScreenMode::LevelSelect;
         Vec2 activeCursor{};
         RECT lastBoardRect{};
+        int resizeLevelTopY = 0;
+        int resizeLevelHiddenY = 0;
         std::wstring levelName;
         std::wstring hint;
         std::wstring status = L"Press on a colored dot and draw to its twin.";
@@ -165,6 +168,7 @@ namespace
     RECT GetLevelGridRect();
     RECT GetLevelButtonRect(int levelIndex);
     Vec2 AnchorToClient(int anchorId);
+    Vec2 ResizeLevelAnchorToClient(int anchorId);
     Vec2 LevelSelectToClient(int levelIndex);
     Vec2 ClampToBoard(Vec2 point);
     float DistanceSquared(const Vec2& a, const Vec2& b);
@@ -277,6 +281,11 @@ namespace
     // 把锚点编号转换成窗口客户区中的真实像素坐标。
     Vec2 AnchorToClient(int anchorId)
     {
+        if (g.screen == ScreenMode::Playing && g.levelIndex == kResizeLevelIndex)
+        {
+            return ResizeLevelAnchorToClient(anchorId);
+        }
+
         const RECT board = GetAnchorRect();
         Vec2 anchor = kAnchorLayout[static_cast<size_t>(anchorId)];
         if (g.screen == ScreenMode::Playing && g.levelIndex == kBendLevelIndex)
@@ -291,6 +300,49 @@ namespace
             board.left + anchor.x * static_cast<float>(WidthOf(board)),
             board.top + anchor.y * static_cast<float>(HeightOf(board))
         };
+    }
+
+    Vec2 ResizeLevelAnchorToClient(int anchorId)
+    {
+        RECT client{};
+        GetClientRect(g.hwnd, &client);
+
+        // 第五关的谜题点不依赖普通棋盘，而是依赖窗口尺寸本身。
+        // 上方三个点一直留在窗口里，下方三个点被放在初始下边框外，
+        // 玩家必须把窗口下边框往下拖大，才能看到并连接它们。
+        const std::array<float, 3> xRel = { 0.22f, 0.50f, 0.78f };
+        int column = 0;
+        bool hiddenBelowWindow = false;
+        switch (anchorId)
+        {
+        case 0:
+            column = 0;
+            break;
+        case 1:
+            column = 1;
+            break;
+        case 2:
+            column = 2;
+            break;
+        case 10:
+            column = 0;
+            hiddenBelowWindow = true;
+            break;
+        case 11:
+            column = 1;
+            hiddenBelowWindow = true;
+            break;
+        case 12:
+            column = 2;
+            hiddenBelowWindow = true;
+            break;
+        default:
+            break;
+        }
+
+        const float x = client.left + xRel[static_cast<size_t>(column)] * static_cast<float>(WidthOf(client));
+        const float y = static_cast<float>(hiddenBelowWindow ? g.resizeLevelHiddenY : g.resizeLevelTopY);
+        return Vec2{ x, y };
     }
 
     Vec2 LevelSelectToClient(int levelIndex)
@@ -584,12 +636,12 @@ namespace
                 }
             },
             {
-                L"PATCH",
-                L"Draw carefully. The pane split is useful, not decorative.",
+                L"RESIZE",
+                L"The matching dots are below the window. Pull the lower border down.",
                 {
-                    { kRed, 0, 14 },
-                    { kYellow, 5, 4 },
-                    { kBlue, 10, 9 },
+                    { kYellow, 0, 10 },
+                    { kBlue, 1, 11 },
+                    { kRed, 2, 12 },
                 }
             },
             {
@@ -841,6 +893,19 @@ namespace
         g.pendingReturnToSelect = false;
         g.clearedAtTick = 0;
         g.activeCursor = {};
+        if (index == kResizeLevelIndex)
+        {
+            RECT client{};
+            GetClientRect(g.hwnd, &client);
+            const int clientHeight = std::max(1, HeightOf(client));
+            g.resizeLevelTopY = std::max(170, static_cast<int>(clientHeight * 0.44f));
+            g.resizeLevelHiddenY = clientHeight + 92;
+        }
+        else
+        {
+            g.resizeLevelTopY = 0;
+            g.resizeLevelHiddenY = 0;
+        }
         g.lastBoardRect = GetAnchorRect();
         RefreshState();
     }
@@ -1237,6 +1302,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             g.unlockedLevels = static_cast<int>(g.defs.size());
             LoadLevel(kGapLevelIndex);
         }
+        else if (commandLine.find(L"--level=5") != std::wstring::npos)
+        {
+            g.unlockedLevels = static_cast<int>(g.defs.size());
+            LoadLevel(kResizeLevelIndex);
+        }
         else
         {
             g.unlockedLevels = kDeveloperUnlockAllLevels ? static_cast<int>(g.defs.size()) : 1;
@@ -1255,7 +1325,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         {
             const RECT oldBoard = g.lastBoardRect;
             const RECT newBoard = GetAnchorRect();
-            ShiftPaths(static_cast<float>(newBoard.left - oldBoard.left), static_cast<float>(newBoard.top - oldBoard.top));
+            if (g.screen == ScreenMode::Playing && g.levelIndex != kResizeLevelIndex)
+            {
+                ShiftPaths(static_cast<float>(newBoard.left - oldBoard.left), static_cast<float>(newBoard.top - oldBoard.top));
+            }
             g.lastBoardRect = newBoard;
             RefreshState();
             InvalidateRect(hwnd, nullptr, FALSE);
