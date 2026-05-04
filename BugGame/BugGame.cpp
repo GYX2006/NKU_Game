@@ -59,6 +59,7 @@ namespace
     constexpr int kResizeLevelIndex = 4;
     constexpr int kDividerLevelIndex = 5;
     constexpr int kBoxLevelIndex = 6;
+    constexpr int kHitboxLevelIndex = 7;
     // 开发调试开关：true 表示选关界面里所有已做好的关卡都可以直接打开。
     // 如果之后想恢复正式流程，把这里改成 false 即可回到逐关解锁。
     constexpr bool kDeveloperUnlockAllLevels = true;
@@ -133,6 +134,7 @@ namespace
         RECT lastBoardRect{};
         RECT fixedAnchorRect{};
         std::array<Vec2, 15> fixedAnchors{};
+        std::array<Vec2, 15> visualAnchors{};
         int resizeLevelTopY = 0;
         int resizeLevelHiddenY = 0;
         Vec2 boxLeftDot{};
@@ -183,6 +185,7 @@ namespace
     Vec2 AnchorFromRect(const RECT& board, const std::array<Vec2, 15>& layout, int anchorId);
     void CaptureLevelGeometry(int index);
     Vec2 AnchorToClient(int anchorId);
+    Vec2 EndpointVisualToClient(int anchorId);
     Vec2 ResizeLevelAnchorToClient(int anchorId);
     Vec2 LevelSelectToClient(int levelIndex);
     Vec2 ClampToBoard(Vec2 point);
@@ -212,6 +215,7 @@ namespace
     void DrawGapStructure(HDC hdc);
     void DrawDividerStructure(HDC hdc);
     void DrawBoxStructure(HDC hdc);
+    void DrawHitboxMarkers(HDC hdc);
     std::vector<LevelDefinition> BuildLevels();
     std::wstring ColorName(COLORREF color);
     std::vector<Segment> BuildSegments();
@@ -343,6 +347,16 @@ namespace
         return AnchorFromRect(board, kAnchorLayout, anchorId);
     }
 
+    Vec2 EndpointVisualToClient(int anchorId)
+    {
+        if (g.screen == ScreenMode::Playing)
+        {
+            return g.visualAnchors[static_cast<size_t>(anchorId)];
+        }
+
+        return AnchorToClient(anchorId);
+    }
+
     Vec2 ResizeLevelAnchorToClient(int anchorId)
     {
         RECT client{};
@@ -403,6 +417,7 @@ namespace
                 g.fixedAnchors[static_cast<size_t>(anchorId)] = AnchorFromRect(g.fixedAnchorRect, layout, anchorId);
             }
         }
+        g.visualAnchors = g.fixedAnchors;
 
         if (index == kBoxLevelIndex)
         {
@@ -421,11 +436,36 @@ namespace
             g.boxRightDot = rightDot;
             g.fixedAnchors[0] = leftDot;
             g.fixedAnchors[8] = rightDot;
+            g.visualAnchors[0] = leftDot;
+            g.visualAnchors[8] = rightDot;
             g.boxFrameRect = MakeRect(
                 static_cast<int>(std::round(rightDot.x)) - boxSize / 2,
                 static_cast<int>(std::round(rightDot.y)) - boxSize / 2,
                 static_cast<int>(std::round(rightDot.x)) + boxSize / 2,
                 static_cast<int>(std::round(rightDot.y)) + boxSize / 2);
+        }
+        else if (index == kHitboxLevelIndex)
+        {
+            const RECT board = GetBoardRect();
+            const Vec2 realStart{
+                board.left + 0.28f * static_cast<float>(WidthOf(board)),
+                board.top + 0.56f * static_cast<float>(HeightOf(board))
+            };
+            const Vec2 realEnd{
+                board.left + 0.72f * static_cast<float>(WidthOf(board)),
+                board.top + 0.44f * static_cast<float>(HeightOf(board))
+            };
+
+            // 第八关故意让“看见的红点”和“真正能点中的碰撞中心”错开。
+            // 大红点负责制造误导；小黑点是调试视角下暴露出来的真实 hitbox。
+            g.fixedAnchors[0] = realStart;
+            g.fixedAnchors[14] = realEnd;
+            g.visualAnchors[0] = Vec2{ realStart.x - 70.0f, realStart.y - 48.0f };
+            g.visualAnchors[14] = Vec2{ realEnd.x + 70.0f, realEnd.y + 48.0f };
+
+            g.boxLeftDot = {};
+            g.boxRightDot = {};
+            g.boxFrameRect = {};
         }
         else
         {
@@ -823,6 +863,17 @@ namespace
         }
     }
 
+    void DrawHitboxMarkers(HDC hdc)
+    {
+        // 错位碰撞箱关卡中的小黑点代表真实判定中心。
+        // 玩家需要按小黑点，而不是按看起来更显眼的大红点。
+        for (const WireDefinition& wire : g.wires)
+        {
+            DrawCircle(hdc, AnchorToClient(wire.startAnchor), kAnchorHintRadius + 2, kBlack, kBlack, 1);
+            DrawCircle(hdc, AnchorToClient(wire.endAnchor), kAnchorHintRadius + 2, kBlack, kBlack, 1);
+        }
+    }
+
     std::vector<LevelDefinition> BuildLevels()
     {
         return {
@@ -884,6 +935,13 @@ namespace
                 L"The dot is boxed in. Leave the window and come back inside.",
                 {
                     { kRed, 0, 8 },
+                }
+            },
+            {
+                L"HITBOX",
+                L"The visible dot is not the clickable dot. Follow the debug centers.",
+                {
+                    { kRed, 0, 14 },
                 }
             },
         };
@@ -1563,8 +1621,13 @@ namespace
         // 绘制所有彩色端点。现在端点比旧版更大，也更接近参考作品的视觉重点。
         for (const WireDefinition& wire : g.wires)
         {
-            DrawCircle(hdc, AnchorToClient(wire.startAnchor), kEndpointRadius, wire.color, wire.color, 1);
-            DrawCircle(hdc, AnchorToClient(wire.endAnchor), kEndpointRadius, wire.color, wire.color, 1);
+            DrawCircle(hdc, EndpointVisualToClient(wire.startAnchor), kEndpointRadius, wire.color, wire.color, 1);
+            DrawCircle(hdc, EndpointVisualToClient(wire.endAnchor), kEndpointRadius, wire.color, wire.color, 1);
+        }
+
+        if (g.levelIndex == kHitboxLevelIndex)
+        {
+            DrawHitboxMarkers(hdc);
         }
     }
 
@@ -1627,6 +1690,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         {
             g.unlockedLevels = static_cast<int>(g.defs.size());
             LoadLevel(kBoxLevelIndex);
+        }
+        else if (commandLine.find(L"--level=8") != std::wstring::npos)
+        {
+            g.unlockedLevels = static_cast<int>(g.defs.size());
+            LoadLevel(kHitboxLevelIndex);
         }
         else
         {
