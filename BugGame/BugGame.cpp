@@ -183,7 +183,12 @@ namespace
     bool NearlySamePoint(const Vec2& a, const Vec2& b);
     float Cross(const Vec2& a, const Vec2& b, const Vec2& c);
     bool OnSegment(const Vec2& a, const Vec2& b, const Vec2& point);
+    bool SegmentsIntersectInclusive(const Vec2& firstA, const Vec2& firstB, const Vec2& secondA, const Vec2& secondB);
     bool SegmentsIntersect(const Segment& first, const Segment& second);
+    bool PointInsideRect(const Vec2& point, const RECT& rect);
+    bool SegmentIntersectsRect(const Vec2& a, const Vec2& b, const RECT& rect);
+    RECT GetDividerWallRect();
+    bool SegmentHitsDividerWall(const Vec2& a, const Vec2& b);
     HPEN CreateRoundedPen(COLORREF color, int width);
     void FillRectColor(HDC hdc, const RECT& rect, COLORREF color);
     void DrawTextBlock(HDC hdc, const std::wstring& text, const RECT& rect, int size, int weight, UINT format);
@@ -416,6 +421,26 @@ namespace
 
     // 判断两条线段是否相交。
     // 共享端点是允许的，因为它们可能只是正常接到同一个节点。
+    bool SegmentsIntersectInclusive(const Vec2& firstA, const Vec2& firstB, const Vec2& secondA, const Vec2& secondB)
+    {
+        const float d1 = Cross(firstA, firstB, secondA);
+        const float d2 = Cross(firstA, firstB, secondB);
+        const float d3 = Cross(secondA, secondB, firstA);
+        const float d4 = Cross(secondA, secondB, firstB);
+
+        const bool proper = ((d1 > 0.0f && d2 < 0.0f) || (d1 < 0.0f && d2 > 0.0f)) &&
+            ((d3 > 0.0f && d4 < 0.0f) || (d3 < 0.0f && d4 > 0.0f));
+        if (proper)
+        {
+            return true;
+        }
+
+        return OnSegment(firstA, firstB, secondA) ||
+            OnSegment(firstA, firstB, secondB) ||
+            OnSegment(secondA, secondB, firstA) ||
+            OnSegment(secondA, secondB, firstB);
+    }
+
     bool SegmentsIntersect(const Segment& first, const Segment& second)
     {
         if (NearlySamePoint(first.a, second.a) || NearlySamePoint(first.a, second.b) ||
@@ -441,6 +466,50 @@ namespace
     }
 
     // 创建圆头、圆角连接的画笔，让玩家画出来的线更接近参考游戏的柔和视觉。
+    bool PointInsideRect(const Vec2& point, const RECT& rect)
+    {
+        return point.x >= static_cast<float>(rect.left) &&
+            point.x <= static_cast<float>(rect.right) &&
+            point.y >= static_cast<float>(rect.top) &&
+            point.y <= static_cast<float>(rect.bottom);
+    }
+
+    bool SegmentIntersectsRect(const Vec2& a, const Vec2& b, const RECT& rect)
+    {
+        if (PointInsideRect(a, rect) || PointInsideRect(b, rect))
+        {
+            return true;
+        }
+
+        const Vec2 topLeft{ static_cast<float>(rect.left), static_cast<float>(rect.top) };
+        const Vec2 topRight{ static_cast<float>(rect.right), static_cast<float>(rect.top) };
+        const Vec2 bottomRight{ static_cast<float>(rect.right), static_cast<float>(rect.bottom) };
+        const Vec2 bottomLeft{ static_cast<float>(rect.left), static_cast<float>(rect.bottom) };
+
+        return SegmentsIntersectInclusive(a, b, topLeft, topRight) ||
+            SegmentsIntersectInclusive(a, b, topRight, bottomRight) ||
+            SegmentsIntersectInclusive(a, b, bottomRight, bottomLeft) ||
+            SegmentsIntersectInclusive(a, b, bottomLeft, topLeft);
+    }
+
+    RECT GetDividerWallRect()
+    {
+        RECT client{};
+        GetClientRect(g.hwnd, &client);
+
+        const RECT board = GetAnchorRect();
+        const int thickness = 10;
+        const int x = board.left + WidthOf(board) / 2;
+        return MakeRect(x - thickness / 2, client.top, x + thickness / 2, client.bottom);
+    }
+
+    bool SegmentHitsDividerWall(const Vec2& a, const Vec2& b)
+    {
+        return g.screen == ScreenMode::Playing &&
+            g.levelIndex == kDividerLevelIndex &&
+            SegmentIntersectsRect(a, b, GetDividerWallRect());
+    }
+
     HPEN CreateRoundedPen(COLORREF color, int width)
     {
         LOGBRUSH brush{};
@@ -611,15 +680,7 @@ namespace
 
     void DrawDividerStructure(HDC hdc)
     {
-        RECT client{};
-        GetClientRect(g.hwnd, &client);
-
-        const RECT board = GetAnchorRect();
-        const int thickness = 10;
-        const int x = board.left + WidthOf(board) / 2;
-        const int top = std::max(client.top + 18, board.top - 130);
-        const int bottom = std::min(client.bottom - 18, board.bottom + 130);
-        FillRectColor(hdc, MakeRect(x - thickness / 2, top, x + thickness / 2, bottom), kWallGray);
+        FillRectColor(hdc, GetDividerWallRect(), kWallGray);
     }
 
     std::vector<LevelDefinition> BuildLevels()
@@ -865,6 +926,17 @@ namespace
             }
         }
 
+        if (g.levelIndex == kDividerLevelIndex)
+        {
+            for (const Segment& segment : segments)
+            {
+                if (SegmentHitsDividerWall(segment.a, segment.b))
+                {
+                    ++g.crossings;
+                }
+            }
+        }
+
         bool allConnected = !g.paths.empty();
         for (const PathState& path : g.paths)
         {
@@ -1041,7 +1113,22 @@ namespace
         }
 
         PathState& path = g.paths[g.activeWire];
-        point = ClampToBoard(point);
+        if (g.levelIndex == kDividerLevelIndex)
+        {
+            RECT client{};
+            GetClientRect(g.hwnd, &client);
+
+            // 第六关允许玩家把线从窗口下边框外绕过去；
+            // 因此只限制水平范围，垂直方向允许伸到当前窗口下方一段距离。
+            constexpr int kClientPadding = 6;
+            constexpr int kOutsideBottomRoom = 520;
+            point.x = std::clamp(point.x, static_cast<float>(client.left + kClientPadding), static_cast<float>(client.right - kClientPadding));
+            point.y = std::clamp(point.y, static_cast<float>(client.top + kClientPadding), static_cast<float>(client.bottom + kOutsideBottomRoom));
+        }
+        else
+        {
+            point = ClampToBoard(point);
+        }
         g.activeCursor = point;
 
         if (path.points.empty())
@@ -1067,6 +1154,12 @@ namespace
                 start.x + (point.x - start.x) * t,
                 start.y + (point.y - start.y) * t
             };
+
+            if (SegmentHitsDividerWall(path.points.back(), sample))
+            {
+                g.activeCursor = path.points.back();
+                break;
+            }
 
             if (DistanceSquared(path.points.back(), sample) >= 4.0f)
             {
@@ -1105,7 +1198,9 @@ namespace
         const Vec2 cursor{ static_cast<float>(point.x), static_cast<float>(point.y) };
         AppendActivePoint(cursor);
 
-        if (DistanceSquared(cursor, target) <= static_cast<float>((kEndpointRadius + 10) * (kEndpointRadius + 10)))
+        const bool canReachTargetWithoutWall = !path.points.empty() && !SegmentHitsDividerWall(path.points.back(), target);
+        if (canReachTargetWithoutWall &&
+            DistanceSquared(cursor, target) <= static_cast<float>((kEndpointRadius + 10) * (kEndpointRadius + 10)))
         {
             if (path.points.size() < 2 || !NearlySamePoint(path.points.back(), target))
             {
