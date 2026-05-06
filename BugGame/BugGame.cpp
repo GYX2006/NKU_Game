@@ -39,9 +39,6 @@ namespace
     constexpr int kWireThickness = 10;
     constexpr int kEndpointRadius = 26;
     constexpr int kAnchorHintRadius = 8;
-    constexpr int kEraserDotRadius = 30;
-    constexpr int kEraserPreviewRadius = 16;
-    constexpr int kEraserLineThickness = 20;
     constexpr int kLevelTileSize = 104;
     constexpr int kLevelTileGap = 22;
     constexpr int kLevelTileCornerRadius = 18;
@@ -113,18 +110,6 @@ namespace
         bool startsAtStartAnchor = true;
     };
 
-    struct ErasedLine
-    {
-        Vec2 a{};
-        Vec2 b{};
-    };
-
-    enum class EraserMode
-    {
-        Dot,
-        Line,
-    };
-
     enum class ScreenMode
     {
         LevelSelect,
@@ -160,12 +145,10 @@ namespace
         Vec2 boxLeftDot{};
         Vec2 boxRightDot{};
         RECT boxFrameRect{};
-        EraserMode eraserMode = EraserMode::Dot;
         bool erasing = false;
         Vec2 eraserCursor{};
-        Vec2 eraserLineStart{};
         std::vector<Vec2> erasedDots;
-        std::vector<ErasedLine> erasedLines;
+        std::vector<Vec2> erasedStroke;
         std::wstring levelName;
         std::wstring hint;
         std::wstring status = L"Press on a colored dot and draw to its twin.";
@@ -269,7 +252,6 @@ namespace
     bool FindEndpointHit(POINT point, int& wireIndex, bool& startsAtStartAnchor);
     bool FindLevelButtonHit(POINT point, int& levelIndex);
     void ResetEraserState();
-    void ToggleEraserMode(int wheelDelta);
     void BeginEraserAction(POINT point);
     void UpdateEraserAction(POINT point);
     void EndEraserAction(POINT point);
@@ -711,34 +693,22 @@ namespace
 
     bool IsEraserPuzzleSolved()
     {
-        if (g.erasedDots.size() < 2 || g.erasedLines.empty())
+        if (g.erasedDots.size() < 2 || g.erasedStroke.size() < 2)
         {
             return false;
         }
 
-        const float connectRadius = static_cast<float>(kEraserDotRadius + 12);
+        const Vec2& firstDot = g.erasedDots.front();
+        const Vec2& secondDot = g.erasedDots.back();
+        const Vec2& strokeStart = g.erasedStroke.front();
+        const Vec2& strokeEnd = g.erasedStroke.back();
+        const float connectRadius = static_cast<float>(kEndpointRadius + 10);
         const float connectRadius2 = connectRadius * connectRadius;
-        for (const ErasedLine& line : g.erasedLines)
-        {
-            for (size_t first = 0; first < g.erasedDots.size(); ++first)
-            {
-                for (size_t second = first + 1; second < g.erasedDots.size(); ++second)
-                {
-                    const Vec2& a = g.erasedDots[first];
-                    const Vec2& b = g.erasedDots[second];
-                    const bool forward = DistanceSquared(line.a, a) <= connectRadius2 &&
-                        DistanceSquared(line.b, b) <= connectRadius2;
-                    const bool backward = DistanceSquared(line.a, b) <= connectRadius2 &&
-                        DistanceSquared(line.b, a) <= connectRadius2;
-                    if (forward || backward)
-                    {
-                        return true;
-                    }
-                }
-            }
-        }
 
-        return false;
+        // 第九关的“bug”规则：玩家自己画出的同一笔白线，首尾两个白点被它连起来即可修复。
+        return DistanceSquared(firstDot, strokeStart) <= connectRadius2 &&
+            DistanceSquared(secondDot, strokeEnd) <= connectRadius2 &&
+            DistanceSquared(firstDot, secondDot) > 64.0f;
     }
 
     void FinishEraserLevelIfSolved()
@@ -1118,35 +1088,30 @@ namespace
     {
         FillRectColor(hdc, clientRect, kWallGray);
 
-        HPEN linePen = CreateRoundedPen(kWhite, kEraserLineThickness);
-        HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, linePen));
-        for (const ErasedLine& line : g.erasedLines)
+        if (g.erasedStroke.size() >= 2)
         {
-            MoveToEx(hdc, static_cast<int>(line.a.x), static_cast<int>(line.a.y), nullptr);
-            LineTo(hdc, static_cast<int>(line.b.x), static_cast<int>(line.b.y));
-        }
+            PathState whitePath{};
+            whitePath.points = g.erasedStroke;
+            const std::vector<Vec2> displayPath = BuildDisplayPath(whitePath, false);
 
-        if (g.erasing && g.eraserMode == EraserMode::Line)
-        {
-            MoveToEx(hdc, static_cast<int>(g.eraserLineStart.x), static_cast<int>(g.eraserLineStart.y), nullptr);
-            LineTo(hdc, static_cast<int>(g.eraserCursor.x), static_cast<int>(g.eraserCursor.y));
+            HPEN linePen = CreateRoundedPen(kWhite, kWireThickness);
+            HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, linePen));
+            MoveToEx(hdc, static_cast<int>(displayPath.front().x), static_cast<int>(displayPath.front().y), nullptr);
+            for (size_t i = 1; i < displayPath.size(); ++i)
+            {
+                LineTo(hdc, static_cast<int>(displayPath[i].x), static_cast<int>(displayPath[i].y));
+            }
+            SelectObject(hdc, oldPen);
+            DeleteObject(linePen);
         }
-        SelectObject(hdc, oldPen);
-        DeleteObject(linePen);
 
         for (const Vec2& dot : g.erasedDots)
         {
-            DrawCircle(hdc, dot, kEraserDotRadius, kWhite, kWhite, 1);
+            DrawCircle(hdc, dot, kEndpointRadius, kWhite, kWhite, 1);
         }
 
-        if (g.eraserMode == EraserMode::Dot)
-        {
-            DrawCircle(hdc, g.eraserCursor, kEraserPreviewRadius, kWhite, kWhite, 1);
-        }
-        else if (!g.erasing)
-        {
-            DrawCircle(hdc, g.eraserCursor, kEraserPreviewRadius, kWhite, kWhite, 1);
-        }
+        // 自由绘制时的画笔和前面关卡一样是一个小点，只是颜色固定为白色。
+        DrawCircle(hdc, g.eraserCursor, kAnchorHintRadius, kWhite, kWhite, 1);
     }
 
     std::vector<LevelDefinition> BuildLevels()
@@ -1221,7 +1186,7 @@ namespace
             },
             {
                 L"ERASE",
-                L"Erase two dots and one line. Wheel switches the eraser.",
+                L"Draw anywhere. One white line should connect two white dots.",
                 {
                 }
             },
@@ -1398,7 +1363,7 @@ namespace
             FinishEraserLevelIfSolved();
             if (!g.cleared)
             {
-                g.status = g.eraserMode == EraserMode::Dot ? L"Dot eraser" : L"Line eraser";
+                g.status = L"Draw one white line.";
             }
             return;
         }
@@ -1584,22 +1549,9 @@ namespace
     void ResetEraserState()
     {
         g.erasing = false;
-        g.eraserMode = EraserMode::Dot;
         g.eraserCursor = {};
-        g.eraserLineStart = {};
         g.erasedDots.clear();
-        g.erasedLines.clear();
-    }
-
-    void ToggleEraserMode(int wheelDelta)
-    {
-        if (!IsEraserLevel() || wheelDelta == 0)
-        {
-            return;
-        }
-
-        g.eraserMode = g.eraserMode == EraserMode::Dot ? EraserMode::Line : EraserMode::Dot;
-        InvalidateRect(g.hwnd, nullptr, FALSE);
+        g.erasedStroke.clear();
     }
 
     void BeginEraserAction(POINT point)
@@ -1612,18 +1564,10 @@ namespace
         g.pendingReturnToSelect = false;
         g.erasing = true;
         g.eraserCursor = Vec2{ static_cast<float>(point.x), static_cast<float>(point.y) };
-        g.eraserLineStart = g.eraserCursor;
-
-        if (g.eraserMode == EraserMode::Dot)
-        {
-            g.erasedDots.push_back(g.eraserCursor);
-            if (g.erasedDots.size() > 2)
-            {
-                g.erasedDots.erase(g.erasedDots.begin());
-            }
-            g.erasing = false;
-            FinishEraserLevelIfSolved();
-        }
+        g.erasedDots.clear();
+        g.erasedDots.push_back(g.eraserCursor);
+        g.erasedStroke.clear();
+        g.erasedStroke.push_back(g.eraserCursor);
 
         SetCapture(g.hwnd);
         InvalidateRect(g.hwnd, nullptr, FALSE);
@@ -1637,6 +1581,11 @@ namespace
         }
 
         g.eraserCursor = Vec2{ static_cast<float>(point.x), static_cast<float>(point.y) };
+        if (g.erasing &&
+            (g.erasedStroke.empty() || DistanceSquared(g.erasedStroke.back(), g.eraserCursor) >= kDrawPointStep * kDrawPointStep))
+        {
+            g.erasedStroke.push_back(g.eraserCursor);
+        }
         InvalidateRect(g.hwnd, nullptr, FALSE);
     }
 
@@ -1648,15 +1597,25 @@ namespace
         }
 
         g.eraserCursor = Vec2{ static_cast<float>(point.x), static_cast<float>(point.y) };
-        if (g.erasing && g.eraserMode == EraserMode::Line &&
-            DistanceSquared(g.eraserLineStart, g.eraserCursor) > 64.0f)
+        if (g.erasing)
         {
-            g.erasedLines.push_back({ g.eraserLineStart, g.eraserCursor });
-            if (g.erasedLines.size() > 1)
+            if (g.erasedStroke.empty() || !NearlySamePoint(g.erasedStroke.back(), g.eraserCursor))
             {
-                g.erasedLines.erase(g.erasedLines.begin());
+                g.erasedStroke.push_back(g.eraserCursor);
             }
-            FinishEraserLevelIfSolved();
+
+            if (!g.erasedStroke.empty() && DistanceSquared(g.erasedStroke.front(), g.eraserCursor) > 64.0f)
+            {
+                if (g.erasedDots.size() == 1)
+                {
+                    g.erasedDots.push_back(g.eraserCursor);
+                }
+                else if (g.erasedDots.size() >= 2)
+                {
+                    g.erasedDots.back() = g.eraserCursor;
+                }
+                FinishEraserLevelIfSolved();
+            }
         }
 
         g.erasing = false;
@@ -2213,14 +2172,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         {
             SetCursor(nullptr);
             return TRUE;
-        }
-        break;
-
-    case WM_MOUSEWHEEL:
-        if (IsEraserLevel())
-        {
-            ToggleEraserMode(GET_WHEEL_DELTA_WPARAM(wParam));
-            return 0;
         }
         break;
 
