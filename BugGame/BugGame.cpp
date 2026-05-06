@@ -1145,12 +1145,7 @@ namespace
         }
         else if (!g.erasing)
         {
-            HPEN previewPen = CreateRoundedPen(kWhite, kEraserLineThickness);
-            HPEN oldPreviewPen = static_cast<HPEN>(SelectObject(hdc, previewPen));
-            MoveToEx(hdc, static_cast<int>(g.eraserCursor.x - 24.0f), static_cast<int>(g.eraserCursor.y), nullptr);
-            LineTo(hdc, static_cast<int>(g.eraserCursor.x + 24.0f), static_cast<int>(g.eraserCursor.y));
-            SelectObject(hdc, oldPreviewPen);
-            DeleteObject(previewPen);
+            DrawCircle(hdc, g.eraserCursor, kEraserPreviewRadius, kWhite, kWhite, 1);
         }
     }
 
