@@ -199,6 +199,12 @@ namespace
     Vec2 LevelSelectToClient(int levelIndex);
     Vec2 ClampToBoard(Vec2 point);
     float DistanceSquared(const Vec2& a, const Vec2& b);
+    float DistancePointToSegmentSquared(const Vec2& point, const Vec2& a, const Vec2& b);
+    Vec2 RelativeClientPoint(float xRatio, float yRatio);
+    Vec2 EraserVisualMarker(int markerIndex);
+    Vec2 EraserHitboxCenter(int markerIndex);
+    Vec2 EraserCoreCenter();
+    bool StrokePassesNear(const std::vector<Vec2>& points, const Vec2& target, float radius);
     bool NearlyEqual(float a, float b);
     bool NearlySamePoint(const Vec2& a, const Vec2& b);
     float Cross(const Vec2& a, const Vec2& b, const Vec2& c);
@@ -508,6 +514,68 @@ namespace
         return dx * dx + dy * dy;
     }
 
+    float DistancePointToSegmentSquared(const Vec2& point, const Vec2& a, const Vec2& b)
+    {
+        const float dx = b.x - a.x;
+        const float dy = b.y - a.y;
+        const float length2 = dx * dx + dy * dy;
+        if (length2 <= 0.001f)
+        {
+            return DistanceSquared(point, a);
+        }
+
+        const float rawT = ((point.x - a.x) * dx + (point.y - a.y) * dy) / length2;
+        const float t = std::max(0.0f, std::min(1.0f, rawT));
+        const Vec2 closest{
+            a.x + dx * t,
+            a.y + dy * t
+        };
+        return DistanceSquared(point, closest);
+    }
+
+    Vec2 RelativeClientPoint(float xRatio, float yRatio)
+    {
+        RECT client{};
+        GetClientRect(g.hwnd, &client);
+        return Vec2{
+            client.left + WidthOf(client) * xRatio,
+            client.top + HeightOf(client) * yRatio
+        };
+    }
+
+    Vec2 EraserVisualMarker(int markerIndex)
+    {
+        return markerIndex == 0 ? RelativeClientPoint(0.30f, 0.58f) : RelativeClientPoint(0.70f, 0.42f);
+    }
+
+    Vec2 EraserHitboxCenter(int markerIndex)
+    {
+        return markerIndex == 0 ? RelativeClientPoint(0.36f, 0.50f) : RelativeClientPoint(0.64f, 0.50f);
+    }
+
+    Vec2 EraserCoreCenter()
+    {
+        return RelativeClientPoint(0.50f, 0.50f);
+    }
+
+    bool StrokePassesNear(const std::vector<Vec2>& points, const Vec2& target, float radius)
+    {
+        if (points.size() < 2)
+        {
+            return false;
+        }
+
+        const float radius2 = radius * radius;
+        for (size_t i = 0; i + 1 < points.size(); ++i)
+        {
+            if (DistancePointToSegmentSquared(target, points[i], points[i + 1]) <= radius2)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     bool NearlyEqual(float a, float b)
     {
         return std::fabs(a - b) <= 0.001f;
@@ -698,17 +766,25 @@ namespace
             return false;
         }
 
-        const Vec2& firstDot = g.erasedDots.front();
-        const Vec2& secondDot = g.erasedDots.back();
-        const Vec2& strokeStart = g.erasedStroke.front();
-        const Vec2& strokeEnd = g.erasedStroke.back();
-        const float connectRadius = static_cast<float>(kEndpointRadius + 10);
-        const float connectRadius2 = connectRadius * connectRadius;
+        const Vec2& start = g.erasedStroke.front();
+        const Vec2& end = g.erasedStroke.back();
+        const Vec2 leftHitbox = EraserHitboxCenter(0);
+        const Vec2 rightHitbox = EraserHitboxCenter(1);
 
-        // 第九关的“bug”规则：玩家自己画出的同一笔白线，首尾两个白点被它连起来即可修复。
-        return DistanceSquared(firstDot, strokeStart) <= connectRadius2 &&
-            DistanceSquared(secondDot, strokeEnd) <= connectRadius2 &&
-            DistanceSquared(firstDot, secondDot) > 64.0f;
+        constexpr float endpointRadius = 34.0f;
+        constexpr float coreRadius = 28.0f;
+        const float endpointRadius2 = endpointRadius * endpointRadius;
+
+        const bool leftToRight =
+            DistanceSquared(start, leftHitbox) <= endpointRadius2 &&
+            DistanceSquared(end, rightHitbox) <= endpointRadius2;
+        const bool rightToLeft =
+            DistanceSquared(start, rightHitbox) <= endpointRadius2 &&
+            DistanceSquared(end, leftHitbox) <= endpointRadius2;
+
+        // 压轴关的 bug：玩家看到的坏点和真正碰撞箱错位，线还必须穿过中央核心区。
+        return (leftToRight || rightToLeft) &&
+            StrokePassesNear(g.erasedStroke, EraserCoreCenter(), coreRadius);
     }
 
     void FinishEraserLevelIfSolved()
@@ -1088,6 +1164,11 @@ namespace
     {
         FillRectColor(hdc, clientRect, kWallGray);
 
+        // 这两个黑点是“坏掉的显示位置”，真正的判定框故意向中间错位。
+        DrawCircle(hdc, EraserVisualMarker(0), 11, kBlack, kBlack, 1);
+        DrawCircle(hdc, EraserVisualMarker(1), 11, kBlack, kBlack, 1);
+        DrawCircle(hdc, EraserCoreCenter(), 20, kWallGray, kBlack, 4);
+
         if (g.erasedStroke.size() >= 2)
         {
             PathState whitePath{};
@@ -1186,7 +1267,7 @@ namespace
             },
             {
                 L"ERASE",
-                L"Draw anywhere. One white line should connect two white dots.",
+                L"The visible pixels are lying. Fix the shifted hitboxes.",
                 {
                 }
             },
@@ -1363,7 +1444,7 @@ namespace
             FinishEraserLevelIfSolved();
             if (!g.cleared)
             {
-                g.status = L"Draw one white line.";
+                g.status = L"Find the shifted hitboxes.";
             }
             return;
         }
