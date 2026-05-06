@@ -14,7 +14,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <cwctype>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -213,6 +215,10 @@ namespace
     COLORREF BackgroundColorFromExecutableName();
     COLORREF CurrentBackgroundColor();
     std::wstring WindowTitleFromExecutableName();
+    std::wstring GetExecutableDirectory();
+    std::wstring GetSaveFilePath();
+    void SaveProgress();
+    bool LoadProgress();
     HPEN CreateRoundedPen(COLORREF color, int width);
     void FillRectColor(HDC hdc, const RECT& rect, COLORREF color);
     void DrawTextBlock(HDC hdc, const std::wstring& text, const RECT& rect, int size, int weight, UINT format);
@@ -745,6 +751,104 @@ namespace
         return stem;
     }
 
+    std::wstring GetExecutableDirectory()
+    {
+        wchar_t path[MAX_PATH]{};
+        GetModuleFileNameW(nullptr, path, MAX_PATH);
+
+        const std::wstring fullPath = path;
+        const size_t slash = fullPath.find_last_of(L"\\/");
+        if (slash == std::wstring::npos)
+        {
+            return L".";
+        }
+        return fullPath.substr(0, slash);
+    }
+
+    std::wstring GetSaveFilePath()
+    {
+        const std::wstring directory = GetExecutableDirectory();
+        if (directory.empty() || directory == L".")
+        {
+            return L"bug_progress.txt";
+        }
+        return directory + L"\\bug_progress.txt";
+    }
+
+    void SaveProgress()
+    {
+        FILE* file = nullptr;
+        if (_wfopen_s(&file, GetSaveFilePath().c_str(), L"w") != 0 || file == nullptr)
+        {
+            return;
+        }
+
+        fwprintf(file, L"WINDOW_BUG_PROGRESS 1\n");
+        fwprintf(file, L"unlocked %d\n", g.unlockedLevels);
+        fwprintf(file, L"completed ");
+        for (bool completed : g.completedLevels)
+        {
+            fwprintf(file, completed ? L"1" : L"0");
+        }
+        fwprintf(file, L"\n");
+        fclose(file);
+    }
+
+    bool LoadProgress()
+    {
+        FILE* file = nullptr;
+        if (_wfopen_s(&file, GetSaveFilePath().c_str(), L"r") != 0 || file == nullptr)
+        {
+            return false;
+        }
+
+        wchar_t line[256]{};
+        if (fgetws(line, static_cast<int>(sizeof(line) / sizeof(line[0])), file) == nullptr)
+        {
+            fclose(file);
+            return false;
+        }
+
+        const std::wstring header = line;
+        if (header.find(L"WINDOW_BUG_PROGRESS") == std::wstring::npos)
+        {
+            fclose(file);
+            return false;
+        }
+
+        int savedUnlocked = g.unlockedLevels;
+        std::vector<bool> savedCompleted(g.completedLevels.size(), false);
+        while (fgetws(line, static_cast<int>(sizeof(line) / sizeof(line[0])), file) != nullptr)
+        {
+            const std::wstring text = line;
+            if (text.rfind(L"unlocked ", 0) == 0)
+            {
+                savedUnlocked = _wtoi(text.c_str() + 9);
+            }
+            else if (text.rfind(L"completed ", 0) == 0)
+            {
+                constexpr size_t kCompletedPrefixLength = 10;
+                for (size_t i = 0; i < savedCompleted.size() && kCompletedPrefixLength + i < text.size(); ++i)
+                {
+                    savedCompleted[i] = text[kCompletedPrefixLength + i] == L'1';
+                }
+            }
+        }
+        fclose(file);
+
+        const int levelCount = static_cast<int>(g.defs.size());
+        g.completedLevels = savedCompleted;
+        g.unlockedLevels = std::clamp(savedUnlocked, 1, std::max(1, levelCount));
+        for (size_t i = 0; i < g.completedLevels.size(); ++i)
+        {
+            if (g.completedLevels[i])
+            {
+                g.unlockedLevels = std::max(g.unlockedLevels, std::min(levelCount, static_cast<int>(i) + 2));
+            }
+        }
+        return true;
+    }
+
     HPEN CreateRoundedPen(COLORREF color, int width)
     {
         LOGBRUSH brush{};
@@ -1228,6 +1332,7 @@ namespace
         {
             g.completedLevels[static_cast<size_t>(g.levelIndex)] = true;
             g.unlockedLevels = std::min(static_cast<int>(g.defs.size()), std::max(g.unlockedLevels, g.levelIndex + 2));
+            SaveProgress();
             g.pendingReturnToSelect = true;
             g.clearedAtTick = GetTickCount();
         }
@@ -1721,6 +1826,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         g.hwnd = hwnd;
         g.defs = BuildLevels();
         g.completedLevels.assign(g.defs.size(), false);
+        g.unlockedLevels = kDeveloperUnlockAllLevels ? static_cast<int>(g.defs.size()) : 1;
+        LoadProgress();
         const std::wstring commandLine = GetCommandLineW();
         if (commandLine.find(L"--level=3") != std::wstring::npos)
         {
@@ -1754,7 +1861,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         }
         else
         {
-            g.unlockedLevels = kDeveloperUnlockAllLevels ? static_cast<int>(g.defs.size()) : 1;
             LoadLevel(0);
             OpenLevelSelect(0);
         }
@@ -1883,6 +1989,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         return 1;
 
     case WM_DESTROY:
+        SaveProgress();
         KillTimer(hwnd, kTimerId);
         PostQuitMessage(0);
         return 0;
