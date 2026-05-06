@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cwctype>
 #include <string>
 #include <vector>
 
@@ -22,7 +23,7 @@ namespace
 {
     // 窗口与棋盘尺寸。整体依旧保持“小白窗”气质。
     constexpr wchar_t kWindowClassName[] = L"WindowBugClass";
-    constexpr wchar_t kWindowTitle[] = L"The Window Has Bugs";
+    constexpr wchar_t kDefaultWindowTitle[] = L"A White Bug";
     constexpr int kWindowWidth = 860;
     constexpr int kWindowHeight = 660;
     constexpr int kBoardWidth = 560;
@@ -52,6 +53,7 @@ namespace
     constexpr COLORREF kRed = RGB(255, 82, 82);
     constexpr COLORREF kYellow = RGB(255, 208, 20);
     constexpr COLORREF kBlue = RGB(52, 112, 255);
+    constexpr COLORREF kGreen = RGB(35, 190, 90);
     constexpr COLORREF kWallGray = RGB(226, 226, 226);
 
     constexpr int kBendLevelIndex = 2;
@@ -59,7 +61,7 @@ namespace
     constexpr int kResizeLevelIndex = 4;
     constexpr int kDividerLevelIndex = 5;
     constexpr int kBoxLevelIndex = 6;
-    constexpr int kHitboxLevelIndex = 7;
+    constexpr int kNameColorLevelIndex = 7;
     // 开发调试开关：true 表示选关界面里所有已做好的关卡都可以直接打开。
     // 如果之后想恢复正式流程，把这里改成 false 即可回到逐关解锁。
     constexpr bool kDeveloperUnlockAllLevels = true;
@@ -205,6 +207,12 @@ namespace
     std::array<RECT, 4> GetBoxWallRects();
     bool SegmentHitsBoxWall(const Vec2& a, const Vec2& b);
     bool SegmentHitsActiveWall(const Vec2& a, const Vec2& b);
+    std::wstring GetExecutableFileName();
+    std::wstring GetExecutableStem();
+    std::wstring ToLowerCopy(std::wstring text);
+    COLORREF BackgroundColorFromExecutableName();
+    COLORREF CurrentBackgroundColor();
+    std::wstring WindowTitleFromExecutableName();
     HPEN CreateRoundedPen(COLORREF color, int width);
     void FillRectColor(HDC hdc, const RECT& rect, COLORREF color);
     void DrawTextBlock(HDC hdc, const std::wstring& text, const RECT& rect, int size, int weight, UINT format);
@@ -215,7 +223,6 @@ namespace
     void DrawGapStructure(HDC hdc);
     void DrawDividerStructure(HDC hdc);
     void DrawBoxStructure(HDC hdc);
-    void DrawHitboxMarkers(HDC hdc);
     std::vector<LevelDefinition> BuildLevels();
     std::wstring ColorName(COLORREF color);
     std::vector<Segment> BuildSegments();
@@ -444,29 +451,6 @@ namespace
                 static_cast<int>(std::round(rightDot.x)) + boxSize / 2,
                 static_cast<int>(std::round(rightDot.y)) + boxSize / 2);
         }
-        else if (index == kHitboxLevelIndex)
-        {
-            const RECT board = GetBoardRect();
-            const Vec2 realStart{
-                board.left + 0.28f * static_cast<float>(WidthOf(board)),
-                board.top + 0.56f * static_cast<float>(HeightOf(board))
-            };
-            const Vec2 realEnd{
-                board.left + 0.72f * static_cast<float>(WidthOf(board)),
-                board.top + 0.44f * static_cast<float>(HeightOf(board))
-            };
-
-            // 第八关故意让“看见的红点”和“真正能点中的碰撞中心”错开。
-            // 大红点负责制造误导；小黑点是调试视角下暴露出来的真实 hitbox。
-            g.fixedAnchors[0] = realStart;
-            g.fixedAnchors[14] = realEnd;
-            g.visualAnchors[0] = Vec2{ realStart.x - 70.0f, realStart.y - 48.0f };
-            g.visualAnchors[14] = Vec2{ realEnd.x + 70.0f, realEnd.y + 48.0f };
-
-            g.boxLeftDot = {};
-            g.boxRightDot = {};
-            g.boxFrameRect = {};
-        }
         else
         {
             g.boxLeftDot = {};
@@ -682,6 +666,85 @@ namespace
         return SegmentHitsDividerWall(a, b) || SegmentHitsBoxWall(a, b);
     }
 
+    std::wstring GetExecutableFileName()
+    {
+        wchar_t path[MAX_PATH]{};
+        GetModuleFileNameW(nullptr, path, MAX_PATH);
+
+        const std::wstring fullPath = path;
+        const size_t slash = fullPath.find_last_of(L"\\/");
+        if (slash == std::wstring::npos)
+        {
+            return fullPath;
+        }
+        return fullPath.substr(slash + 1);
+    }
+
+    std::wstring GetExecutableStem()
+    {
+        std::wstring fileName = GetExecutableFileName();
+        const size_t dot = fileName.find_last_of(L'.');
+        if (dot != std::wstring::npos)
+        {
+            fileName.resize(dot);
+        }
+        return fileName;
+    }
+
+    std::wstring ToLowerCopy(std::wstring text)
+    {
+        for (wchar_t& ch : text)
+        {
+            ch = static_cast<wchar_t>(std::towlower(ch));
+        }
+        return text;
+    }
+
+    COLORREF BackgroundColorFromExecutableName()
+    {
+        const std::wstring name = ToLowerCopy(GetExecutableStem());
+        if (name.find(L"blue") != std::wstring::npos)
+        {
+            return kBlue;
+        }
+        if (name.find(L"yellow") != std::wstring::npos)
+        {
+            return kYellow;
+        }
+        if (name.find(L"green") != std::wstring::npos)
+        {
+            return kGreen;
+        }
+        if (name.find(L"red") != std::wstring::npos)
+        {
+            return kRed;
+        }
+        if (name.find(L"black") != std::wstring::npos)
+        {
+            return kBlack;
+        }
+        return kWhite;
+    }
+
+    COLORREF CurrentBackgroundColor()
+    {
+        if (g.screen == ScreenMode::Playing && g.levelIndex == kNameColorLevelIndex)
+        {
+            return BackgroundColorFromExecutableName();
+        }
+        return kWhite;
+    }
+
+    std::wstring WindowTitleFromExecutableName()
+    {
+        const std::wstring stem = GetExecutableStem();
+        if (stem.empty() || ToLowerCopy(stem) == L"buggame")
+        {
+            return kDefaultWindowTitle;
+        }
+        return stem;
+    }
+
     HPEN CreateRoundedPen(COLORREF color, int width)
     {
         LOGBRUSH brush{};
@@ -863,17 +926,6 @@ namespace
         }
     }
 
-    void DrawHitboxMarkers(HDC hdc)
-    {
-        // 错位碰撞箱关卡中的小黑点代表真实判定中心。
-        // 玩家需要按小黑点，而不是按看起来更显眼的大红点。
-        for (const WireDefinition& wire : g.wires)
-        {
-            DrawCircle(hdc, AnchorToClient(wire.startAnchor), kAnchorHintRadius + 2, kBlack, kBlack, 1);
-            DrawCircle(hdc, AnchorToClient(wire.endAnchor), kAnchorHintRadius + 2, kBlack, kBlack, 1);
-        }
-    }
-
     std::vector<LevelDefinition> BuildLevels()
     {
         return {
@@ -938,10 +990,10 @@ namespace
                 }
             },
             {
-                L"HITBOX",
-                L"The visible dot is not the clickable dot. Follow the debug centers.",
+                L"WHITE",
+                L"Rename A White Bug.exe to A Blue, Yellow, or Green Bug.exe.",
                 {
-                    { kRed, 0, 14 },
+                    { kWhite, 0, 14 },
                 }
             },
         };
@@ -950,6 +1002,10 @@ namespace
     // 把颜色转换成文字，方便状态栏提示玩家当前正在画哪种颜色。
     std::wstring ColorName(COLORREF color)
     {
+        if (color == kWhite)
+        {
+            return L"WHITE";
+        }
         if (color == kRed)
         {
             return L"RED";
@@ -957,6 +1013,10 @@ namespace
         if (color == kYellow)
         {
             return L"YELLOW";
+        }
+        if (color == kGreen)
+        {
+            return L"GREEN";
         }
         return L"BLUE";
     }
@@ -1524,7 +1584,7 @@ namespace
     // 负责绘制整帧画面。
     void DrawScene(HDC hdc, const RECT& clientRect)
     {
-        FillRectColor(hdc, clientRect, kWhite);
+        FillRectColor(hdc, clientRect, CurrentBackgroundColor());
 
         if (g.screen == ScreenMode::LevelSelect)
         {
@@ -1625,10 +1685,6 @@ namespace
             DrawCircle(hdc, EndpointVisualToClient(wire.endAnchor), kEndpointRadius, wire.color, wire.color, 1);
         }
 
-        if (g.levelIndex == kHitboxLevelIndex)
-        {
-            DrawHitboxMarkers(hdc);
-        }
     }
 
     // 双缓冲绘制：先画到内存位图，再一次性拷贝到窗口，减少闪烁。
@@ -1694,7 +1750,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         else if (commandLine.find(L"--level=8") != std::wstring::npos)
         {
             g.unlockedLevels = static_cast<int>(g.defs.size());
-            LoadLevel(kHitboxLevelIndex);
+            LoadLevel(kNameColorLevelIndex);
         }
         else
         {
@@ -1855,11 +1911,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
     const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_THICKFRAME;
     RECT windowRect = MakeRect(0, 0, kWindowWidth, kWindowHeight);
     AdjustWindowRect(&windowRect, style, FALSE);
+    const std::wstring windowTitle = WindowTitleFromExecutableName();
 
     HWND hwnd = CreateWindowExW(
         0,
         kWindowClassName,
-        kWindowTitle,
+        windowTitle.c_str(),
         style,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
