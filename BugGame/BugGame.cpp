@@ -39,6 +39,9 @@ namespace
     constexpr int kWireThickness = 10;
     constexpr int kEndpointRadius = 26;
     constexpr int kAnchorHintRadius = 8;
+    constexpr int kEraserDotRadius = 30;
+    constexpr int kEraserPreviewRadius = 16;
+    constexpr int kEraserLineThickness = 20;
     constexpr int kLevelTileSize = 104;
     constexpr int kLevelTileGap = 22;
     constexpr int kLevelTileCornerRadius = 18;
@@ -64,6 +67,7 @@ namespace
     constexpr int kDividerLevelIndex = 5;
     constexpr int kBoxLevelIndex = 6;
     constexpr int kNameColorLevelIndex = 7;
+    constexpr int kEraserLevelIndex = 8;
     // 开发调试开关：true 表示选关界面里所有已做好的关卡都可以直接打开。
     // 如果之后想恢复正式流程，把这里改成 false 即可回到逐关解锁。
     constexpr bool kDeveloperUnlockAllLevels = true;
@@ -109,6 +113,18 @@ namespace
         bool startsAtStartAnchor = true;
     };
 
+    struct ErasedLine
+    {
+        Vec2 a{};
+        Vec2 b{};
+    };
+
+    enum class EraserMode
+    {
+        Dot,
+        Line,
+    };
+
     enum class ScreenMode
     {
         LevelSelect,
@@ -144,6 +160,12 @@ namespace
         Vec2 boxLeftDot{};
         Vec2 boxRightDot{};
         RECT boxFrameRect{};
+        EraserMode eraserMode = EraserMode::Dot;
+        bool erasing = false;
+        Vec2 eraserCursor{};
+        Vec2 eraserLineStart{};
+        std::vector<Vec2> erasedDots;
+        std::vector<ErasedLine> erasedLines;
         std::wstring levelName;
         std::wstring hint;
         std::wstring status = L"Press on a colored dot and draw to its twin.";
@@ -209,6 +231,9 @@ namespace
     std::array<RECT, 4> GetBoxWallRects();
     bool SegmentHitsBoxWall(const Vec2& a, const Vec2& b);
     bool SegmentHitsActiveWall(const Vec2& a, const Vec2& b);
+    bool IsEraserLevel();
+    bool IsEraserPuzzleSolved();
+    void FinishEraserLevelIfSolved();
     std::wstring GetExecutableFileName();
     std::wstring GetExecutableStem();
     std::wstring ToLowerCopy(std::wstring text);
@@ -229,6 +254,7 @@ namespace
     void DrawGapStructure(HDC hdc);
     void DrawDividerStructure(HDC hdc);
     void DrawBoxStructure(HDC hdc);
+    void DrawEraserLevel(HDC hdc, const RECT& clientRect);
     std::vector<LevelDefinition> BuildLevels();
     std::wstring ColorName(COLORREF color);
     std::vector<Segment> BuildSegments();
@@ -242,6 +268,12 @@ namespace
     void NextLevel();
     bool FindEndpointHit(POINT point, int& wireIndex, bool& startsAtStartAnchor);
     bool FindLevelButtonHit(POINT point, int& levelIndex);
+    void ResetEraserState();
+    void ToggleEraserMode(int wheelDelta);
+    void BeginEraserAction(POINT point);
+    void UpdateEraserAction(POINT point);
+    void EndEraserAction(POINT point);
+    void CancelEraserAction();
     void BeginDraw(int wireIndex, bool startsAtStartAnchor);
     void AppendActivePoint(Vec2 point);
     void UpdateDraw(POINT point);
@@ -672,6 +704,58 @@ namespace
         return SegmentHitsDividerWall(a, b) || SegmentHitsBoxWall(a, b);
     }
 
+    bool IsEraserLevel()
+    {
+        return g.screen == ScreenMode::Playing && g.levelIndex == kEraserLevelIndex;
+    }
+
+    bool IsEraserPuzzleSolved()
+    {
+        if (g.erasedDots.size() < 2 || g.erasedLines.empty())
+        {
+            return false;
+        }
+
+        const float connectRadius = static_cast<float>(kEraserDotRadius + 12);
+        const float connectRadius2 = connectRadius * connectRadius;
+        for (const ErasedLine& line : g.erasedLines)
+        {
+            for (size_t first = 0; first < g.erasedDots.size(); ++first)
+            {
+                for (size_t second = first + 1; second < g.erasedDots.size(); ++second)
+                {
+                    const Vec2& a = g.erasedDots[first];
+                    const Vec2& b = g.erasedDots[second];
+                    const bool forward = DistanceSquared(line.a, a) <= connectRadius2 &&
+                        DistanceSquared(line.b, b) <= connectRadius2;
+                    const bool backward = DistanceSquared(line.a, b) <= connectRadius2 &&
+                        DistanceSquared(line.b, a) <= connectRadius2;
+                    if (forward || backward)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    void FinishEraserLevelIfSolved()
+    {
+        if (!IsEraserLevel() || g.cleared || !IsEraserPuzzleSolved())
+        {
+            return;
+        }
+
+        g.cleared = true;
+        g.completedLevels[static_cast<size_t>(g.levelIndex)] = true;
+        g.unlockedLevels = std::min(static_cast<int>(g.defs.size()), std::max(g.unlockedLevels, g.levelIndex + 2));
+        SaveProgress();
+        g.pendingReturnToSelect = true;
+        g.clearedAtTick = GetTickCount();
+    }
+
     std::wstring GetExecutableFileName()
     {
         wchar_t path[MAX_PATH]{};
@@ -1030,6 +1114,46 @@ namespace
         }
     }
 
+    void DrawEraserLevel(HDC hdc, const RECT& clientRect)
+    {
+        FillRectColor(hdc, clientRect, kWallGray);
+
+        HPEN linePen = CreateRoundedPen(kWhite, kEraserLineThickness);
+        HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, linePen));
+        for (const ErasedLine& line : g.erasedLines)
+        {
+            MoveToEx(hdc, static_cast<int>(line.a.x), static_cast<int>(line.a.y), nullptr);
+            LineTo(hdc, static_cast<int>(line.b.x), static_cast<int>(line.b.y));
+        }
+
+        if (g.erasing && g.eraserMode == EraserMode::Line)
+        {
+            MoveToEx(hdc, static_cast<int>(g.eraserLineStart.x), static_cast<int>(g.eraserLineStart.y), nullptr);
+            LineTo(hdc, static_cast<int>(g.eraserCursor.x), static_cast<int>(g.eraserCursor.y));
+        }
+        SelectObject(hdc, oldPen);
+        DeleteObject(linePen);
+
+        for (const Vec2& dot : g.erasedDots)
+        {
+            DrawCircle(hdc, dot, kEraserDotRadius, kWhite, kWhite, 1);
+        }
+
+        if (g.eraserMode == EraserMode::Dot)
+        {
+            DrawCircle(hdc, g.eraserCursor, kEraserPreviewRadius, kWhite, kWhite, 1);
+        }
+        else if (!g.erasing)
+        {
+            HPEN previewPen = CreateRoundedPen(kWhite, kEraserLineThickness);
+            HPEN oldPreviewPen = static_cast<HPEN>(SelectObject(hdc, previewPen));
+            MoveToEx(hdc, static_cast<int>(g.eraserCursor.x - 24.0f), static_cast<int>(g.eraserCursor.y), nullptr);
+            LineTo(hdc, static_cast<int>(g.eraserCursor.x + 24.0f), static_cast<int>(g.eraserCursor.y));
+            SelectObject(hdc, oldPreviewPen);
+            DeleteObject(previewPen);
+        }
+    }
+
     std::vector<LevelDefinition> BuildLevels()
     {
         return {
@@ -1098,6 +1222,12 @@ namespace
                 L"Rename A White Bug.exe to A Blue, Yellow, or Green Bug.exe.",
                 {
                     { kWhite, 0, 14 },
+                }
+            },
+            {
+                L"ERASE",
+                L"Erase two dots and one line. Wheel switches the eraser.",
+                {
                 }
             },
         };
@@ -1267,6 +1397,17 @@ namespace
             return;
         }
 
+        if (IsEraserLevel())
+        {
+            g.crossings = 0;
+            FinishEraserLevelIfSolved();
+            if (!g.cleared)
+            {
+                g.status = g.eraserMode == EraserMode::Dot ? L"Dot eraser" : L"Line eraser";
+            }
+            return;
+        }
+
         const std::vector<Segment> segments = BuildSegments();
         g.crossings = 0;
 
@@ -1370,6 +1511,7 @@ namespace
         g.pendingReturnToSelect = false;
         g.clearedAtTick = 0;
         g.activeCursor = {};
+        ResetEraserState();
         if (index == kResizeLevelIndex)
         {
             RECT client{};
@@ -1385,6 +1527,15 @@ namespace
         }
 
         CaptureLevelGeometry(index);
+        if (index == kEraserLevelIndex)
+        {
+            RECT client{};
+            GetClientRect(g.hwnd, &client);
+            g.eraserCursor = Vec2{
+                client.left + WidthOf(client) * 0.5f,
+                client.top + HeightOf(client) * 0.5f
+            };
+        }
         g.lastBoardRect = g.fixedAnchorRect;
         RefreshState();
     }
@@ -1433,6 +1584,100 @@ namespace
         }
 
         return false;
+    }
+
+    void ResetEraserState()
+    {
+        g.erasing = false;
+        g.eraserMode = EraserMode::Dot;
+        g.eraserCursor = {};
+        g.eraserLineStart = {};
+        g.erasedDots.clear();
+        g.erasedLines.clear();
+    }
+
+    void ToggleEraserMode(int wheelDelta)
+    {
+        if (!IsEraserLevel() || wheelDelta == 0)
+        {
+            return;
+        }
+
+        g.eraserMode = g.eraserMode == EraserMode::Dot ? EraserMode::Line : EraserMode::Dot;
+        InvalidateRect(g.hwnd, nullptr, FALSE);
+    }
+
+    void BeginEraserAction(POINT point)
+    {
+        if (!IsEraserLevel())
+        {
+            return;
+        }
+
+        g.pendingReturnToSelect = false;
+        g.erasing = true;
+        g.eraserCursor = Vec2{ static_cast<float>(point.x), static_cast<float>(point.y) };
+        g.eraserLineStart = g.eraserCursor;
+
+        if (g.eraserMode == EraserMode::Dot)
+        {
+            g.erasedDots.push_back(g.eraserCursor);
+            if (g.erasedDots.size() > 2)
+            {
+                g.erasedDots.erase(g.erasedDots.begin());
+            }
+            g.erasing = false;
+            FinishEraserLevelIfSolved();
+        }
+
+        SetCapture(g.hwnd);
+        InvalidateRect(g.hwnd, nullptr, FALSE);
+    }
+
+    void UpdateEraserAction(POINT point)
+    {
+        if (!IsEraserLevel())
+        {
+            return;
+        }
+
+        g.eraserCursor = Vec2{ static_cast<float>(point.x), static_cast<float>(point.y) };
+        InvalidateRect(g.hwnd, nullptr, FALSE);
+    }
+
+    void EndEraserAction(POINT point)
+    {
+        if (!IsEraserLevel())
+        {
+            return;
+        }
+
+        g.eraserCursor = Vec2{ static_cast<float>(point.x), static_cast<float>(point.y) };
+        if (g.erasing && g.eraserMode == EraserMode::Line &&
+            DistanceSquared(g.eraserLineStart, g.eraserCursor) > 64.0f)
+        {
+            g.erasedLines.push_back({ g.eraserLineStart, g.eraserCursor });
+            if (g.erasedLines.size() > 1)
+            {
+                g.erasedLines.erase(g.erasedLines.begin());
+            }
+            FinishEraserLevelIfSolved();
+        }
+
+        g.erasing = false;
+        ReleaseCapture();
+        InvalidateRect(g.hwnd, nullptr, FALSE);
+    }
+
+    void CancelEraserAction()
+    {
+        if (!IsEraserLevel())
+        {
+            return;
+        }
+
+        g.erasing = false;
+        InvalidateRect(g.hwnd, nullptr, FALSE);
     }
 
     // 判断鼠标是否点中了某条线路的某个端点。
@@ -1727,6 +1972,12 @@ namespace
             return;
         }
 
+        if (g.levelIndex == kEraserLevelIndex)
+        {
+            DrawEraserLevel(hdc, clientRect);
+            return;
+        }
+
 
         // 玩家正在画某条线时，把目标端点再用同色扩大显示，降低操作门槛。
 
@@ -1859,6 +2110,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             g.unlockedLevels = static_cast<int>(g.defs.size());
             LoadLevel(kNameColorLevelIndex);
         }
+        else if (commandLine.find(L"--level=9") != std::wstring::npos)
+        {
+            g.unlockedLevels = static_cast<int>(g.defs.size());
+            LoadLevel(kEraserLevelIndex);
+        }
         else
         {
             LoadLevel(0);
@@ -1896,6 +2152,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             return 0;
         }
 
+        if (IsEraserLevel())
+        {
+            BeginEraserAction(point);
+            return 0;
+        }
+
         int wireIndex = -1;
         bool startsAtStartAnchor = true;
         if (FindEndpointHit(point, wireIndex, startsAtStartAnchor))
@@ -1920,7 +2182,14 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         }
         else
         {
-            UpdateDraw(point);
+            if (IsEraserLevel())
+            {
+                UpdateEraserAction(point);
+            }
+            else
+            {
+                UpdateDraw(point);
+            }
         }
         return 0;
     }
@@ -1931,10 +2200,34 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
         if (g.screen == ScreenMode::Playing)
         {
-            EndDraw(point);
+            if (IsEraserLevel())
+            {
+                EndEraserAction(point);
+            }
+            else
+            {
+                EndDraw(point);
+            }
         }
         return 0;
     }
+
+    case WM_SETCURSOR:
+        // 第九关用我们自己绘制的白色橡皮预览代替系统箭头，窗口边框仍保留缩放光标。
+        if (LOWORD(lParam) == HTCLIENT && IsEraserLevel())
+        {
+            SetCursor(nullptr);
+            return TRUE;
+        }
+        break;
+
+    case WM_MOUSEWHEEL:
+        if (IsEraserLevel())
+        {
+            ToggleEraserMode(GET_WHEEL_DELTA_WPARAM(wParam));
+            return 0;
+        }
+        break;
 
     case WM_KEYDOWN:
         // 键盘操作只保留重开、下一关和退出。
@@ -1970,6 +2263,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
     case WM_CAPTURECHANGED:
         // 如果鼠标捕获意外丢失，就取消正在绘制的路径，避免状态卡住。
         CancelDraw();
+        CancelEraserAction();
         return 0;
 
     case WM_PAINT:
