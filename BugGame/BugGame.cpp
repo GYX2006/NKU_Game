@@ -158,6 +158,7 @@ namespace
         std::vector<EraserCircle> erasedCircles;
         std::vector<Vec2> erasedStroke;
         std::vector<Vec2> activeEraserStroke;
+        std::vector<std::vector<Vec2>> eraserPaintStrokes;
         std::wstring levelName;
         std::wstring hint;
         std::wstring status = L"Press on a colored dot and draw to its twin.";
@@ -213,6 +214,10 @@ namespace
     bool StrokePassesNear(const std::vector<Vec2>& points, const Vec2& target, float radius);
     bool TryRecognizeCircle(const std::vector<Vec2>& points, EraserCircle& circle);
     bool StrokeTouchesCircle(const std::vector<Vec2>& points, const EraserCircle& circle);
+    Vec2 FinalBugPointCenter();
+    COLORREF FinalBugPointColor();
+    float FinalBugPaintCoverage();
+    bool IsFinalBugPainted();
     bool NearlyEqual(float a, float b);
     bool NearlySamePoint(const Vec2& a, const Vec2& b);
     float Cross(const Vec2& a, const Vec2& b, const Vec2& c);
@@ -654,6 +659,76 @@ namespace
         return StrokePassesNear(points, circle.center, circle.radius + static_cast<float>(kWireThickness + 12));
     }
 
+    Vec2 FinalBugPointCenter()
+    {
+        RECT client{};
+        GetClientRect(g.hwnd, &client);
+        return Vec2{
+            client.left + WidthOf(client) * 0.5f,
+            client.top + HeightOf(client) * 0.52f
+        };
+    }
+
+    COLORREF FinalBugPointColor()
+    {
+        return BackgroundColorFromExecutableName();
+    }
+
+    float FinalBugPaintCoverage()
+    {
+        const Vec2 center = FinalBugPointCenter();
+        constexpr float bugRadius = 34.0f;
+        constexpr float sampleStep = bugRadius * 0.42f;
+        const float brushReach = static_cast<float>(kWireThickness) + 8.0f;
+
+        int covered = 0;
+        int total = 0;
+        for (int y = -2; y <= 2; ++y)
+        {
+            for (int x = -2; x <= 2; ++x)
+            {
+                const Vec2 sample{
+                    center.x + x * sampleStep,
+                    center.y + y * sampleStep
+                };
+                if (DistanceSquared(sample, center) > bugRadius * bugRadius)
+                {
+                    continue;
+                }
+
+                ++total;
+                bool sampleCovered = false;
+                for (const std::vector<Vec2>& stroke : g.eraserPaintStrokes)
+                {
+                    if (StrokePassesNear(stroke, sample, brushReach))
+                    {
+                        sampleCovered = true;
+                        break;
+                    }
+                }
+                if (!sampleCovered && g.erasing)
+                {
+                    sampleCovered = StrokePassesNear(g.activeEraserStroke, sample, brushReach);
+                }
+                if (sampleCovered)
+                {
+                    ++covered;
+                }
+            }
+        }
+
+        if (total == 0)
+        {
+            return 0.0f;
+        }
+        return static_cast<float>(covered) / static_cast<float>(total);
+    }
+
+    bool IsFinalBugPainted()
+    {
+        return FinalBugPaintCoverage() >= 0.58f;
+    }
+
     bool NearlyEqual(float a, float b)
     {
         return std::fabs(a - b) <= 0.001f;
@@ -839,20 +914,7 @@ namespace
 
     bool IsEraserPuzzleSolved()
     {
-        if (g.erasedCircles.size() < 2 || g.erasedStroke.size() < 2)
-        {
-            return false;
-        }
-
-        const EraserCircle& first = g.erasedCircles[g.erasedCircles.size() - 2];
-        const EraserCircle& second = g.erasedCircles[g.erasedCircles.size() - 1];
-        if (DistanceSquared(first.center, second.center) < 90.0f * 90.0f)
-        {
-            return false;
-        }
-
-        // 压轴关的核心：两个“点”和连接线都必须是玩家自己徒手画出来的。
-        return StrokeTouchesCircle(g.erasedStroke, first) && StrokeTouchesCircle(g.erasedStroke, second);
+        return IsFinalBugPainted();
     }
 
     void FinishEraserLevelIfSolved()
@@ -866,8 +928,9 @@ namespace
         g.completedLevels[static_cast<size_t>(g.levelIndex)] = true;
         g.unlockedLevels = std::min(static_cast<int>(g.defs.size()), std::max(g.unlockedLevels, g.levelIndex + 2));
         SaveProgress();
-        g.pendingReturnToSelect = true;
         g.clearedAtTick = GetTickCount();
+        g.pendingReturnToSelect = false;
+        g.status = L"All bugs are fixed.";
     }
 
     std::wstring GetExecutableFileName()
@@ -1295,21 +1358,37 @@ namespace
 
     void DrawEraserLevel(HDC hdc, const RECT& clientRect)
     {
-        FillRectColor(hdc, clientRect, kWallGray);
+        FillRectColor(hdc, clientRect, kWhite);
 
-        for (const EraserCircle& circle : g.erasedCircles)
+        if (!g.cleared)
         {
-            DrawWhiteStroke(hdc, circle.points);
+            const Vec2 bugCenter = FinalBugPointCenter();
+            const COLORREF bugColor = FinalBugPointColor();
+            const COLORREF outlineColor = bugColor == kWhite ? kWallGray : bugColor;
+            DrawCircle(hdc, bugCenter, 34, bugColor, outlineColor, bugColor == kWhite ? 2 : 1);
+
+            for (const std::vector<Vec2>& stroke : g.eraserPaintStrokes)
+            {
+                DrawWhiteStroke(hdc, stroke);
+            }
+            if (g.erasing)
+            {
+                DrawWhiteStroke(hdc, g.activeEraserStroke);
+            }
+
+            DrawCircle(hdc, g.eraserCursor, kAnchorHintRadius, kWhite, kWallGray, 1);
+            return;
         }
 
-        DrawWhiteStroke(hdc, g.erasedStroke);
-        if (g.erasing)
-        {
-            DrawWhiteStroke(hdc, g.activeEraserStroke);
-        }
-
-        // 自由绘制时的画笔和前面关卡一样是一个小点，只是颜色固定为白色。
-        DrawCircle(hdc, g.eraserCursor, kAnchorHintRadius, kWhite, kWhite, 1);
+        const std::wstring message = L"All Bugs Are Fixed";
+        const DWORD elapsed = GetTickCount() - g.clearedAtTick;
+        const size_t visibleCount = std::min(message.size(), static_cast<size_t>(elapsed / 75));
+        const std::wstring visibleText = message.substr(0, visibleCount);
+        const int pulse = static_cast<int>(std::min<DWORD>(24, elapsed / 30));
+        RECT textRect = clientRect;
+        textRect.top += HeightOf(clientRect) / 2 - 58;
+        textRect.bottom = textRect.top + 116;
+        DrawTextBlock(hdc, visibleText, textRect, 42 + pulse / 8, FW_BOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 
     std::vector<LevelDefinition> BuildLevels()
@@ -1384,7 +1463,7 @@ namespace
             },
             {
                 L"ERASE",
-                L"Draw two circles, then draw one line connecting them.",
+                L"Paint the last colored bug white.",
                 {
                 }
             },
@@ -1561,7 +1640,7 @@ namespace
             FinishEraserLevelIfSolved();
             if (!g.cleared)
             {
-                g.status = L"Draw two circles and connect them.";
+                g.status = L"Paint the last colored bug white.";
             }
             return;
         }
@@ -1691,7 +1770,7 @@ namespace
             GetClientRect(g.hwnd, &client);
             g.eraserCursor = Vec2{
                 client.left + WidthOf(client) * 0.5f,
-                client.top + HeightOf(client) * 0.5f
+                client.top + HeightOf(client) * 0.82f
             };
         }
         g.lastBoardRect = g.fixedAnchorRect;
@@ -1752,11 +1831,12 @@ namespace
         g.erasedCircles.clear();
         g.erasedStroke.clear();
         g.activeEraserStroke.clear();
+        g.eraserPaintStrokes.clear();
     }
 
     void BeginEraserAction(POINT point)
     {
-        if (!IsEraserLevel())
+        if (!IsEraserLevel() || g.cleared)
         {
             return;
         }
@@ -1774,7 +1854,7 @@ namespace
 
     void UpdateEraserAction(POINT point)
     {
-        if (!IsEraserLevel())
+        if (!IsEraserLevel() || g.cleared)
         {
             return;
         }
@@ -1790,7 +1870,7 @@ namespace
 
     void EndEraserAction(POINT point)
     {
-        if (!IsEraserLevel())
+        if (!IsEraserLevel() || g.cleared)
         {
             return;
         }
@@ -1803,18 +1883,13 @@ namespace
                 g.activeEraserStroke.push_back(g.eraserCursor);
             }
 
-            EraserCircle circle{};
-            if (TryRecognizeCircle(g.activeEraserStroke, circle))
+            if (StrokeLength(g.activeEraserStroke) >= 6.0f)
             {
-                g.erasedCircles.push_back(circle);
-                if (g.erasedCircles.size() > 2)
+                g.eraserPaintStrokes.push_back(g.activeEraserStroke);
+                if (g.eraserPaintStrokes.size() > 32)
                 {
-                    g.erasedCircles.erase(g.erasedCircles.begin());
+                    g.eraserPaintStrokes.erase(g.eraserPaintStrokes.begin());
                 }
-            }
-            else if (StrokeLength(g.activeEraserStroke) >= 48.0f)
-            {
-                g.erasedStroke = g.activeEraserStroke;
             }
 
             FinishEraserLevelIfSolved();
@@ -2424,6 +2499,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         if (wParam == kTimerId)
         {
             UpdateAutoReturn();
+            if (IsEraserLevel() && g.cleared)
+            {
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
             return 0;
         }
         break;
