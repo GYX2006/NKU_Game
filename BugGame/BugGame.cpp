@@ -110,6 +110,13 @@ namespace
         bool startsAtStartAnchor = true;
     };
 
+    struct EraserCircle
+    {
+        Vec2 center{};
+        float radius = 0.0f;
+        std::vector<Vec2> points;
+    };
+
     enum class ScreenMode
     {
         LevelSelect,
@@ -147,8 +154,10 @@ namespace
         RECT boxFrameRect{};
         bool erasing = false;
         Vec2 eraserCursor{};
-        std::vector<Vec2> erasedDots;
+        Vec2 eraserStart{};
+        std::vector<EraserCircle> erasedCircles;
         std::vector<Vec2> erasedStroke;
+        std::vector<Vec2> activeEraserStroke;
         std::wstring levelName;
         std::wstring hint;
         std::wstring status = L"Press on a colored dot and draw to its twin.";
@@ -200,11 +209,10 @@ namespace
     Vec2 ClampToBoard(Vec2 point);
     float DistanceSquared(const Vec2& a, const Vec2& b);
     float DistancePointToSegmentSquared(const Vec2& point, const Vec2& a, const Vec2& b);
-    Vec2 RelativeClientPoint(float xRatio, float yRatio);
-    Vec2 EraserVisualMarker(int markerIndex);
-    Vec2 EraserHitboxCenter(int markerIndex);
-    Vec2 EraserCoreCenter();
+    float StrokeLength(const std::vector<Vec2>& points);
     bool StrokePassesNear(const std::vector<Vec2>& points, const Vec2& target, float radius);
+    bool TryRecognizeCircle(const std::vector<Vec2>& points, EraserCircle& circle);
+    bool StrokeTouchesCircle(const std::vector<Vec2>& points, const EraserCircle& circle);
     bool NearlyEqual(float a, float b);
     bool NearlySamePoint(const Vec2& a, const Vec2& b);
     float Cross(const Vec2& a, const Vec2& b, const Vec2& c);
@@ -238,6 +246,7 @@ namespace
     void DrawTextBlock(HDC hdc, const std::wstring& text, const RECT& rect, int size, int weight, UINT format);
     void DrawCircle(HDC hdc, const Vec2& center, int radius, COLORREF fill, COLORREF stroke, int strokeWidth);
     void DrawRoundedRectBlock(HDC hdc, const RECT& rect, int radius, COLORREF fill, COLORREF stroke, int strokeWidth);
+    void DrawWhiteStroke(HDC hdc, const std::vector<Vec2>& points);
     void DrawBoardFrame(HDC hdc, const RECT& board);
     void DrawBendStructure(HDC hdc);
     void DrawGapStructure(HDC hdc);
@@ -533,29 +542,14 @@ namespace
         return DistanceSquared(point, closest);
     }
 
-    Vec2 RelativeClientPoint(float xRatio, float yRatio)
+    float StrokeLength(const std::vector<Vec2>& points)
     {
-        RECT client{};
-        GetClientRect(g.hwnd, &client);
-        return Vec2{
-            client.left + WidthOf(client) * xRatio,
-            client.top + HeightOf(client) * yRatio
-        };
-    }
-
-    Vec2 EraserVisualMarker(int markerIndex)
-    {
-        return markerIndex == 0 ? RelativeClientPoint(0.30f, 0.58f) : RelativeClientPoint(0.70f, 0.42f);
-    }
-
-    Vec2 EraserHitboxCenter(int markerIndex)
-    {
-        return markerIndex == 0 ? RelativeClientPoint(0.36f, 0.50f) : RelativeClientPoint(0.64f, 0.50f);
-    }
-
-    Vec2 EraserCoreCenter()
-    {
-        return RelativeClientPoint(0.50f, 0.50f);
+        float length = 0.0f;
+        for (size_t i = 1; i < points.size(); ++i)
+        {
+            length += std::sqrt(DistanceSquared(points[i - 1], points[i]));
+        }
+        return length;
     }
 
     bool StrokePassesNear(const std::vector<Vec2>& points, const Vec2& target, float radius)
@@ -574,6 +568,89 @@ namespace
             }
         }
         return false;
+    }
+
+    bool TryRecognizeCircle(const std::vector<Vec2>& points, EraserCircle& circle)
+    {
+        if (points.size() < 18)
+        {
+            return false;
+        }
+
+        float minX = points.front().x;
+        float maxX = points.front().x;
+        float minY = points.front().y;
+        float maxY = points.front().y;
+        for (const Vec2& point : points)
+        {
+            minX = std::min(minX, point.x);
+            maxX = std::max(maxX, point.x);
+            minY = std::min(minY, point.y);
+            maxY = std::max(maxY, point.y);
+        }
+
+        const float width = maxX - minX;
+        const float height = maxY - minY;
+        if (width < 28.0f || height < 28.0f || width > 180.0f || height > 180.0f)
+        {
+            return false;
+        }
+
+        const float aspect = std::max(width, height) / std::max(1.0f, std::min(width, height));
+        if (aspect > 1.65f)
+        {
+            return false;
+        }
+
+        const Vec2 center{
+            (minX + maxX) * 0.5f,
+            (minY + maxY) * 0.5f
+        };
+
+        float radiusSum = 0.0f;
+        for (const Vec2& point : points)
+        {
+            radiusSum += std::sqrt(DistanceSquared(point, center));
+        }
+        const float averageRadius = radiusSum / static_cast<float>(points.size());
+        if (averageRadius < 15.0f || averageRadius > 90.0f)
+        {
+            return false;
+        }
+
+        float variance = 0.0f;
+        for (const Vec2& point : points)
+        {
+            const float radius = std::sqrt(DistanceSquared(point, center));
+            const float delta = radius - averageRadius;
+            variance += delta * delta;
+        }
+        const float deviation = std::sqrt(variance / static_cast<float>(points.size()));
+
+        const float closeDistance = std::sqrt(DistanceSquared(points.front(), points.back()));
+        const float length = StrokeLength(points);
+        if (closeDistance > std::max(24.0f, averageRadius * 0.8f))
+        {
+            return false;
+        }
+        if (length < averageRadius * 4.0f)
+        {
+            return false;
+        }
+        if (deviation > averageRadius * 0.48f)
+        {
+            return false;
+        }
+
+        circle.center = center;
+        circle.radius = averageRadius;
+        circle.points = points;
+        return true;
+    }
+
+    bool StrokeTouchesCircle(const std::vector<Vec2>& points, const EraserCircle& circle)
+    {
+        return StrokePassesNear(points, circle.center, circle.radius + static_cast<float>(kWireThickness + 12));
     }
 
     bool NearlyEqual(float a, float b)
@@ -761,30 +838,20 @@ namespace
 
     bool IsEraserPuzzleSolved()
     {
-        if (g.erasedDots.size() < 2 || g.erasedStroke.size() < 2)
+        if (g.erasedCircles.size() < 2 || g.erasedStroke.size() < 2)
         {
             return false;
         }
 
-        const Vec2& start = g.erasedStroke.front();
-        const Vec2& end = g.erasedStroke.back();
-        const Vec2 leftHitbox = EraserHitboxCenter(0);
-        const Vec2 rightHitbox = EraserHitboxCenter(1);
+        const EraserCircle& first = g.erasedCircles[g.erasedCircles.size() - 2];
+        const EraserCircle& second = g.erasedCircles[g.erasedCircles.size() - 1];
+        if (DistanceSquared(first.center, second.center) < 90.0f * 90.0f)
+        {
+            return false;
+        }
 
-        constexpr float endpointRadius = 34.0f;
-        constexpr float coreRadius = 28.0f;
-        const float endpointRadius2 = endpointRadius * endpointRadius;
-
-        const bool leftToRight =
-            DistanceSquared(start, leftHitbox) <= endpointRadius2 &&
-            DistanceSquared(end, rightHitbox) <= endpointRadius2;
-        const bool rightToLeft =
-            DistanceSquared(start, rightHitbox) <= endpointRadius2 &&
-            DistanceSquared(end, leftHitbox) <= endpointRadius2;
-
-        // 压轴关的 bug：玩家看到的坏点和真正碰撞箱错位，线还必须穿过中央核心区。
-        return (leftToRight || rightToLeft) &&
-            StrokePassesNear(g.erasedStroke, EraserCoreCenter(), coreRadius);
+        // 压轴关的核心：两个“点”和连接线都必须是玩家自己徒手画出来的。
+        return StrokeTouchesCircle(g.erasedStroke, first) && StrokeTouchesCircle(g.erasedStroke, second);
     }
 
     void FinishEraserLevelIfSolved()
@@ -1041,6 +1108,32 @@ namespace
         DeleteObject(pen);
     }
 
+    void DrawWhiteStroke(HDC hdc, const std::vector<Vec2>& points)
+    {
+        if (points.size() < 2)
+        {
+            return;
+        }
+
+        PathState whitePath{};
+        whitePath.points = points;
+        const std::vector<Vec2> displayPath = BuildDisplayPath(whitePath, false);
+        if (displayPath.size() < 2)
+        {
+            return;
+        }
+
+        HPEN linePen = CreateRoundedPen(kWhite, kWireThickness);
+        HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, linePen));
+        MoveToEx(hdc, static_cast<int>(displayPath.front().x), static_cast<int>(displayPath.front().y), nullptr);
+        for (size_t i = 1; i < displayPath.size(); ++i)
+        {
+            LineTo(hdc, static_cast<int>(displayPath[i].x), static_cast<int>(displayPath[i].y));
+        }
+        SelectObject(hdc, oldPen);
+        DeleteObject(linePen);
+    }
+
     void DrawBoardFrame(HDC hdc, const RECT& board)
     {
         HPEN borderPen = CreateRoundedPen(kBlack, kPaneThickness);
@@ -1164,31 +1257,15 @@ namespace
     {
         FillRectColor(hdc, clientRect, kWallGray);
 
-        // 这两个黑点是“坏掉的显示位置”，真正的判定框故意向中间错位。
-        DrawCircle(hdc, EraserVisualMarker(0), 11, kBlack, kBlack, 1);
-        DrawCircle(hdc, EraserVisualMarker(1), 11, kBlack, kBlack, 1);
-        DrawCircle(hdc, EraserCoreCenter(), 20, kWallGray, kBlack, 4);
-
-        if (g.erasedStroke.size() >= 2)
+        for (const EraserCircle& circle : g.erasedCircles)
         {
-            PathState whitePath{};
-            whitePath.points = g.erasedStroke;
-            const std::vector<Vec2> displayPath = BuildDisplayPath(whitePath, false);
-
-            HPEN linePen = CreateRoundedPen(kWhite, kWireThickness);
-            HPEN oldPen = static_cast<HPEN>(SelectObject(hdc, linePen));
-            MoveToEx(hdc, static_cast<int>(displayPath.front().x), static_cast<int>(displayPath.front().y), nullptr);
-            for (size_t i = 1; i < displayPath.size(); ++i)
-            {
-                LineTo(hdc, static_cast<int>(displayPath[i].x), static_cast<int>(displayPath[i].y));
-            }
-            SelectObject(hdc, oldPen);
-            DeleteObject(linePen);
+            DrawWhiteStroke(hdc, circle.points);
         }
 
-        for (const Vec2& dot : g.erasedDots)
+        DrawWhiteStroke(hdc, g.erasedStroke);
+        if (g.erasing)
         {
-            DrawCircle(hdc, dot, kEndpointRadius, kWhite, kWhite, 1);
+            DrawWhiteStroke(hdc, g.activeEraserStroke);
         }
 
         // 自由绘制时的画笔和前面关卡一样是一个小点，只是颜色固定为白色。
@@ -1267,7 +1344,7 @@ namespace
             },
             {
                 L"ERASE",
-                L"The visible pixels are lying. Fix the shifted hitboxes.",
+                L"Draw two circles, then draw one line connecting them.",
                 {
                 }
             },
@@ -1444,7 +1521,7 @@ namespace
             FinishEraserLevelIfSolved();
             if (!g.cleared)
             {
-                g.status = L"Find the shifted hitboxes.";
+                g.status = L"Draw two circles and connect them.";
             }
             return;
         }
@@ -1631,8 +1708,10 @@ namespace
     {
         g.erasing = false;
         g.eraserCursor = {};
-        g.erasedDots.clear();
+        g.eraserStart = {};
+        g.erasedCircles.clear();
         g.erasedStroke.clear();
+        g.activeEraserStroke.clear();
     }
 
     void BeginEraserAction(POINT point)
@@ -1645,10 +1724,9 @@ namespace
         g.pendingReturnToSelect = false;
         g.erasing = true;
         g.eraserCursor = Vec2{ static_cast<float>(point.x), static_cast<float>(point.y) };
-        g.erasedDots.clear();
-        g.erasedDots.push_back(g.eraserCursor);
-        g.erasedStroke.clear();
-        g.erasedStroke.push_back(g.eraserCursor);
+        g.eraserStart = g.eraserCursor;
+        g.activeEraserStroke.clear();
+        g.activeEraserStroke.push_back(g.eraserCursor);
 
         SetCapture(g.hwnd);
         InvalidateRect(g.hwnd, nullptr, FALSE);
@@ -1663,9 +1741,9 @@ namespace
 
         g.eraserCursor = Vec2{ static_cast<float>(point.x), static_cast<float>(point.y) };
         if (g.erasing &&
-            (g.erasedStroke.empty() || DistanceSquared(g.erasedStroke.back(), g.eraserCursor) >= kDrawPointStep * kDrawPointStep))
+            (g.activeEraserStroke.empty() || DistanceSquared(g.activeEraserStroke.back(), g.eraserCursor) >= kDrawPointStep * kDrawPointStep))
         {
-            g.erasedStroke.push_back(g.eraserCursor);
+            g.activeEraserStroke.push_back(g.eraserCursor);
         }
         InvalidateRect(g.hwnd, nullptr, FALSE);
     }
@@ -1680,26 +1758,30 @@ namespace
         g.eraserCursor = Vec2{ static_cast<float>(point.x), static_cast<float>(point.y) };
         if (g.erasing)
         {
-            if (g.erasedStroke.empty() || !NearlySamePoint(g.erasedStroke.back(), g.eraserCursor))
+            if (g.activeEraserStroke.empty() || !NearlySamePoint(g.activeEraserStroke.back(), g.eraserCursor))
             {
-                g.erasedStroke.push_back(g.eraserCursor);
+                g.activeEraserStroke.push_back(g.eraserCursor);
             }
 
-            if (!g.erasedStroke.empty() && DistanceSquared(g.erasedStroke.front(), g.eraserCursor) > 64.0f)
+            EraserCircle circle{};
+            if (TryRecognizeCircle(g.activeEraserStroke, circle))
             {
-                if (g.erasedDots.size() == 1)
+                g.erasedCircles.push_back(circle);
+                if (g.erasedCircles.size() > 2)
                 {
-                    g.erasedDots.push_back(g.eraserCursor);
+                    g.erasedCircles.erase(g.erasedCircles.begin());
                 }
-                else if (g.erasedDots.size() >= 2)
-                {
-                    g.erasedDots.back() = g.eraserCursor;
-                }
-                FinishEraserLevelIfSolved();
             }
+            else if (StrokeLength(g.activeEraserStroke) >= 48.0f)
+            {
+                g.erasedStroke = g.activeEraserStroke;
+            }
+
+            FinishEraserLevelIfSolved();
         }
 
         g.erasing = false;
+        g.activeEraserStroke.clear();
         ReleaseCapture();
         InvalidateRect(g.hwnd, nullptr, FALSE);
     }
@@ -1712,6 +1794,7 @@ namespace
         }
 
         g.erasing = false;
+        g.activeEraserStroke.clear();
         InvalidateRect(g.hwnd, nullptr, FALSE);
     }
 
