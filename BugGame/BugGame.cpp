@@ -241,6 +241,7 @@ namespace
     std::wstring GetSaveFilePath();
     void SaveProgress();
     bool LoadProgress();
+    HICON CreateGameIcon(int size);
     HPEN CreateRoundedPen(COLORREF color, int width);
     void FillRectColor(HDC hdc, const RECT& rect, COLORREF color);
     void DrawTextBlock(HDC hdc, const std::wstring& text, const RECT& rect, int size, int weight, UINT format);
@@ -1044,6 +1045,45 @@ namespace
             }
         }
         return true;
+    }
+
+    HICON CreateGameIcon(int size)
+    {
+        HDC screenDc = GetDC(nullptr);
+        HDC memoryDc = CreateCompatibleDC(screenDc);
+        HBITMAP colorBitmap = CreateCompatibleBitmap(screenDc, size, size);
+        HBITMAP oldBitmap = static_cast<HBITMAP>(SelectObject(memoryDc, colorBitmap));
+
+        RECT iconRect = MakeRect(0, 0, size, size);
+        FillRectColor(memoryDc, iconRect, kWhite);
+
+        const int gap = std::max(1, size / 8);
+        const int square = std::max(3, (size - gap * 4) / 3);
+        const int left = gap;
+        const int top = gap;
+        const int secondRow = top + square + gap;
+        const int secondColumn = left + square + gap;
+
+        FillRectColor(memoryDc, MakeRect(left, top, left + square, top + square), kRed);
+        FillRectColor(memoryDc, MakeRect(left, secondRow, left + square, secondRow + square), kBlue);
+        FillRectColor(memoryDc, MakeRect(secondColumn, secondRow, secondColumn + square, secondRow + square), kYellow);
+
+        SelectObject(memoryDc, oldBitmap);
+        DeleteDC(memoryDc);
+        ReleaseDC(nullptr, screenDc);
+
+        const int maskStride = ((size + 15) / 16) * 2;
+        std::vector<BYTE> maskBits(static_cast<size_t>(maskStride * size), 0);
+        HBITMAP maskBitmap = CreateBitmap(size, size, 1, 1, maskBits.data());
+        ICONINFO iconInfo{};
+        iconInfo.fIcon = TRUE;
+        iconInfo.hbmColor = colorBitmap;
+        iconInfo.hbmMask = maskBitmap;
+        HICON icon = CreateIconIndirect(&iconInfo);
+
+        DeleteObject(colorBitmap);
+        DeleteObject(maskBitmap);
+        return icon;
     }
 
     HPEN CreateRoundedPen(COLORREF color, int width)
@@ -2408,12 +2448,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
 // Windows 程序入口：注册窗口类 -> 创建窗口 -> 显示窗口 -> 进入消息循环。
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
 {
+    HICON largeIcon = CreateGameIcon(32);
+    HICON smallIcon = CreateGameIcon(16);
+
     WNDCLASSW windowClass{};
     windowClass.lpfnWndProc = WindowProc;
     windowClass.hInstance = instance;
     windowClass.lpszClassName = kWindowClassName;
     windowClass.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    windowClass.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
+    windowClass.hIcon = largeIcon != nullptr ? largeIcon : LoadIcon(nullptr, IDI_APPLICATION);
     windowClass.hbrBackground = static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH));
 
     RegisterClassW(&windowClass);
@@ -2440,7 +2483,25 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
 
     if (!hwnd)
     {
+        if (largeIcon != nullptr)
+        {
+            DestroyIcon(largeIcon);
+        }
+        if (smallIcon != nullptr)
+        {
+            DestroyIcon(smallIcon);
+        }
         return 0;
+    }
+
+    // 标题栏左上角的专属标识：红、蓝、黄三个小方块，对应游戏的极简三原色视觉。
+    if (largeIcon != nullptr)
+    {
+        SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(largeIcon));
+    }
+    if (smallIcon != nullptr)
+    {
+        SendMessageW(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(smallIcon));
     }
 
     ShowWindow(hwnd, showCommand);
@@ -2453,5 +2514,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand)
         DispatchMessageW(&message);
     }
 
-    return static_cast<int>(message.wParam);
+    const int exitCode = static_cast<int>(message.wParam);
+    if (largeIcon != nullptr)
+    {
+        DestroyIcon(largeIcon);
+    }
+    if (smallIcon != nullptr)
+    {
+        DestroyIcon(smallIcon);
+    }
+    return exitCode;
 }
