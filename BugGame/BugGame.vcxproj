@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64">
@@ -87,7 +87,33 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="BugGame.cpp" />
+    <ClCompile Include="Source\State.cpp" />
+    <ClCompile Include="Source\Layout.cpp" />
+    <ClCompile Include="Source\GeometryAndCollision.cpp" />
+    <ClCompile Include="Source\SystemProgress.cpp" />
+    <ClCompile Include="Source\Graphics.cpp" />
+    <ClCompile Include="Source\Levels.cpp" />
+    <ClCompile Include="Source\RulesAndFlow.cpp" />
+    <ClCompile Include="Source\Input.cpp" />
+    <ClCompile Include="Source\RenderScene.cpp" />
+    <ClCompile Include="Source\WinMain.cpp" />
+    <ClCompile Include="Source\Levels\Level01_BOOT.cpp" />
+    <ClCompile Include="Source\Levels\Level02_SWEEP.cpp" />
+    <ClCompile Include="Source\Levels\Level03_BEND.cpp" />
+    <ClCompile Include="Source\Levels\Level04_GAP.cpp" />
+    <ClCompile Include="Source\Levels\Level05_RESIZE.cpp" />
+    <ClCompile Include="Source\Levels\Level06_DIVIDE.cpp" />
+    <ClCompile Include="Source\Levels\Level07_BOX.cpp" />
+    <ClCompile Include="Source\Levels\Level08_WHITE.cpp" />
+    <ClCompile Include="Source\Levels\Level09_ERASE.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Source\Game.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Source\README.md" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
 </Project>
+

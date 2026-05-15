@@ -1,14 +1,50 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="Source Files">
       <UniqueIdentifier>{9D1A73C9-14D6-4C1B-BA6F-7C0421F0736F}</UniqueIdentifier>
       <Extensions>cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
     </Filter>
+    <Filter Include="Source Files\Modules">
+      <UniqueIdentifier>{B862B462-D59F-430F-A7F1-7B7B9A6E0F10}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Levels">
+      <UniqueIdentifier>{4419200B-19B1-4F72-B770-6E7154C4207D}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{9C7B5D04-587D-41D3-A72E-BC514277E413}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;hm;inl</Extensions>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>    <ClCompile Include="BugGame.cpp">       <Filter>Source Files</Filter>     </ClCompile>
+    <ClCompile Include="Source\State.cpp">       <Filter>Source Files\Modules</Filter>     </ClCompile>
+    <ClCompile Include="Source\Layout.cpp">       <Filter>Source Files\Modules</Filter>     </ClCompile>
+    <ClCompile Include="Source\GeometryAndCollision.cpp">       <Filter>Source Files\Modules</Filter>     </ClCompile>
+    <ClCompile Include="Source\SystemProgress.cpp">       <Filter>Source Files\Modules</Filter>     </ClCompile>
+    <ClCompile Include="Source\Graphics.cpp">       <Filter>Source Files\Modules</Filter>     </ClCompile>
+    <ClCompile Include="Source\Levels.cpp">       <Filter>Source Files\Modules</Filter>     </ClCompile>
+    <ClCompile Include="Source\RulesAndFlow.cpp">       <Filter>Source Files\Modules</Filter>     </ClCompile>
+    <ClCompile Include="Source\Input.cpp">       <Filter>Source Files\Modules</Filter>     </ClCompile>
+    <ClCompile Include="Source\RenderScene.cpp">       <Filter>Source Files\Modules</Filter>     </ClCompile>
+    <ClCompile Include="Source\WinMain.cpp">       <Filter>Source Files\Modules</Filter>     </ClCompile>
+    <ClCompile Include="Source\Levels\Level01_BOOT.cpp">       <Filter>Source Files\Levels</Filter>     </ClCompile>
+    <ClCompile Include="Source\Levels\Level02_SWEEP.cpp">       <Filter>Source Files\Levels</Filter>     </ClCompile>
+    <ClCompile Include="Source\Levels\Level03_BEND.cpp">       <Filter>Source Files\Levels</Filter>     </ClCompile>
+    <ClCompile Include="Source\Levels\Level04_GAP.cpp">       <Filter>Source Files\Levels</Filter>     </ClCompile>
+    <ClCompile Include="Source\Levels\Level05_RESIZE.cpp">       <Filter>Source Files\Levels</Filter>     </ClCompile>
+    <ClCompile Include="Source\Levels\Level06_DIVIDE.cpp">       <Filter>Source Files\Levels</Filter>     </ClCompile>
+    <ClCompile Include="Source\Levels\Level07_BOX.cpp">       <Filter>Source Files\Levels</Filter>     </ClCompile>
+    <ClCompile Include="Source\Levels\Level08_WHITE.cpp">       <Filter>Source Files\Levels</Filter>     </ClCompile>
+    <ClCompile Include="Source\Levels\Level09_ERASE.cpp">       <Filter>Source Files\Levels</Filter>     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="BugGame.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
+    <ClInclude Include="Source\Game.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Source\README.md">
+      <Filter>Source Files\Modules</Filter>
+    </None>
   </ItemGroup>
 </Project>
