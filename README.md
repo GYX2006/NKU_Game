@@ -2,6 +2,7 @@
 
 在这个库，我将不断记录并更新大作业的创作进度。
 
+本创作大量依靠vibe coding，总觉得不是亲生的，但确乎花了不少时间，就当是新手时期的记录吧
 ## The Window Has Bugs
 
 A small Win32 puzzle game inspired by ultra-minimal window games such as `Window is White`.
